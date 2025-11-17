@@ -1,7 +1,8 @@
 'use client';
 
 // src/app/share/[id]/ShareClient.tsx
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { Mic, Square, Volume2, Check } from 'lucide-react';
 import type { ShareSession, ActorLine, ReaderLine } from '@/types/share';
 
 type Props = {
@@ -10,48 +11,50 @@ type Props = {
 
 export default function ShareClient({ initialSession }: Props) {
 	const [session, setSession] = useState<ShareSession>(initialSession);
-	const [currentIndex, setCurrentIndex] = useState(0);
-	const [isPlaying, setIsPlaying] = useState(false);
-	const [isRecording, setIsRecording] = useState(false);
+	const [activeRecordingLineId, setActiveRecordingLineId] = useState<string | null>(null);
+	const [playingLineId, setPlayingLineId] = useState<string | null>(null);
 
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 	const chunksRef = useRef<Blob[]>([]);
 
-	const actorLines = [...(session.actor_lines || [])].sort((a, b) => a.index - b.index);
-	const readerLines = [...(session.reader_lines || [])].sort((a, b) => a.index - b.index);
-	const currentReader: ReaderLine | undefined = readerLines[currentIndex];
+	const actorLines = useMemo(() => session.actor_lines || [], [session.actor_lines]);
+	const readerLines = useMemo(() => session.reader_lines || [], [session.reader_lines]);
 
-	const aggregatedActorText = actorLines
-		.filter((a) => a.index <= (currentReader?.index ?? Number.MAX_SAFE_INTEGER))
-		.map((a) => a.text)
-		.join('\n\n');
+	// Merge actor + reader lines into a single scene-ordered list (by index)
+	type Item =
+		| { kind: 'actor'; line: ActorLine }
+		| { kind: 'reader'; line: ReaderLine };
+	const items: Item[] = useMemo(() => {
+		const a = (actorLines as ActorLine[]).map((line) => ({ kind: 'actor', line }) as Item);
+		const r = (readerLines as ReaderLine[]).map((line) => ({ kind: 'reader', line }) as Item);
+		return [...a, ...r].sort((x, y) => x.line.index - y.line.index);
+	}, [actorLines, readerLines]);
 
-	const playAudio = (url: string) =>
+	const playAudio = (url: string, lineId: string) =>
 		new Promise<void>((resolve, reject) => {
 			const audio = new Audio(url);
-			audio.onended = () => resolve();
-			audio.onerror = (e) => reject(e);
-			audio.play().catch(reject);
+			audio.onended = () => {
+				setPlayingLineId((id) => (id === lineId ? null : id));
+				resolve();
+			};
+			audio.onerror = (e) => {
+				setPlayingLineId((id) => (id === lineId ? null : id));
+				reject(e);
+			};
+			setPlayingLineId(lineId);
+			audio.play().catch((e) => {
+				setPlayingLineId((id) => (id === lineId ? null : id));
+				reject(e);
+			});
 		});
 
-	const handlePlayActor = async () => {
-		if (!currentReader) return;
-		setIsPlaying(true);
-		try {
-			const relevantActorLines: ActorLine[] = actorLines.filter(
-				(a) => a.index <= currentReader.index
-			);
-			for (const line of relevantActorLines) {
-				if (!line.audioUrl) continue;
-				await playAudio(line.audioUrl);
-			}
-		} finally {
-			setIsPlaying(false);
-		}
+	const handlePlayActor = async (actor?: ActorLine) => {
+		if (!actor || !actor.audioUrl) return;
+		await playAudio(actor.audioUrl, actor.lineId);
 	};
 
-	const startRecording = async () => {
-		if (!currentReader || isRecording) return;
+	const startRecording = async (reader: ReaderLine) => {
+		if (activeRecordingLineId) return;
 		try {
 			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 			const recorder = new MediaRecorder(stream);
@@ -66,12 +69,13 @@ export default function ShareClient({ initialSession }: Props) {
 
 			recorder.onstop = async () => {
 				const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-				await uploadRecording(blob, currentReader.lineId);
+				await uploadRecording(blob, reader.lineId);
 				stream.getTracks().forEach((t) => t.stop());
+				setActiveRecordingLineId(null);
 			};
 
 			recorder.start();
-			setIsRecording(true);
+			setActiveRecordingLineId(reader.lineId);
 		} catch (e) {
 			console.error('Failed to start recording', e);
 			alert('Could not access microphone.');
@@ -80,9 +84,8 @@ export default function ShareClient({ initialSession }: Props) {
 
 	const stopRecording = () => {
 		const recorder = mediaRecorderRef.current;
-		if (recorder && isRecording) {
+		if (recorder && activeRecordingLineId) {
 			recorder.stop();
-			setIsRecording(false);
 		}
 	};
 
@@ -92,6 +95,7 @@ export default function ShareClient({ initialSession }: Props) {
 		formData.append('file', blob, `${lineId}.webm`);
 		formData.append('sessionId', session.id);
 		formData.append('lineId', lineId);
+		formData.append('role', 'reader');
 
 		const uploadRes = await fetch('/api/upload', {
 			method: 'POST',
@@ -123,17 +127,6 @@ export default function ShareClient({ initialSession }: Props) {
 		});
 	};
 
-	const gotoNext = () => {
-		if (currentIndex < readerLines.length - 1) {
-			setCurrentIndex((i) => i + 1);
-		}
-	};
-	const gotoPrev = () => {
-		if (currentIndex > 0) {
-			setCurrentIndex((i) => i - 1);
-		}
-	};
-
 	const markDone = async () => {
 		const res = await fetch('/api/session/done', {
 			method: 'POST',
@@ -148,143 +141,179 @@ export default function ShareClient({ initialSession }: Props) {
 		setSession((prev) => ({ ...prev, status: 'completed' }));
 	};
 
+	const allRecorded = readerLines.length > 0 && readerLines.every((l) => !!l.audioUrl);
+
+	const playReader = async (reader: ReaderLine) => {
+		if (!reader.audioUrl) return;
+		await playAudio(reader.audioUrl, reader.lineId);
+	};
+
 	return (
-		<div>
-			<h1>{session.title}</h1>
-			<p>
+		<div style={{ paddingBottom: 24 }}>
+			<h1 style={{ fontFamily: 'var(--font-display)', fontSize: 28, lineHeight: 1.2, color: '#3B2F2F' }}>
+				{session.title}
+			</h1>
+			<p style={{ fontFamily: 'var(--font-sans)', marginTop: 4, color: '#3B2F2F' }}>
 				Status: <strong>{session.status === 'completed' ? 'Completed' : 'Pending'}</strong>
 			</p>
 
-			<p style={{ marginTop: 16 }}>
-				When you’re ready, play the actor’s lines, then record your response.
-			</p>
-
-			{currentReader ? (
-				<>
-					<div style={{ display: 'flex', gap: 16, marginTop: 24, alignItems: 'flex-start' }}>
-						<section style={{ flex: 1 }}>
-							<h2>Actor (original) lines</h2>
-							<pre
-								style={{
-									whiteSpace: 'pre-wrap',
-									background: '#f5f5f5',
-									padding: 12,
-									borderRadius: 8
-								}}
-							>
-								{aggregatedActorText || '(No actor lines yet)'}
-							</pre>
-							<button
-								disabled={isPlaying}
-								onClick={handlePlayActor}
-								style={{
-									marginTop: 8,
-									padding: '8px 12px',
-									borderRadius: 6,
-									border: '1px solid #ddd',
-									cursor: 'pointer'
-								}}
-							>
-								{isPlaying ? 'Playing…' : 'Play actor audio'}
-							</button>
-						</section>
-
-						<section style={{ flex: 1 }}>
-							<h2>Your reader line</h2>
-							<pre
-								style={{
-									whiteSpace: 'pre-wrap',
-									background: '#f5f5f5',
-									padding: 12,
-									borderRadius: 8
-								}}
-							>
-								{currentReader.text}
-							</pre>
-
-							<div style={{ marginTop: 8 }}>
-								<button
-									onClick={isRecording ? stopRecording : startRecording}
-									style={{
-										padding: '8px 12px',
-										borderRadius: 20,
-										border: 'none',
-										cursor: 'pointer',
-										background: isRecording ? '#ffdddd' : '#e0f5ff'
-									}}
-								>
-									{isRecording ? 'Stop recording' : 'Record'}
-								</button>
-							</div>
-
-							{currentReader.audioUrl && (
-								<div style={{ marginTop: 8 }}>
-									<p>Preview your take:</p>
-									<audio controls src={currentReader.audioUrl} />
-								</div>
-							)}
-						</section>
-					</div>
-
-					<div
-						style={{
-							marginTop: 24,
-							display: 'flex',
-							justifyContent: 'space-between',
-							alignItems: 'center'
-						}}
-					>
-						<div>
-							<button
-								onClick={gotoPrev}
-								disabled={currentIndex === 0}
-								style={{
-									marginRight: 8,
-									padding: '6px 10px',
-									borderRadius: 6,
-									border: '1px solid #ddd',
-									cursor: 'pointer'
-								}}
-							>
-								Prev
-							</button>
-							<button
-								onClick={gotoNext}
-								disabled={currentIndex === readerLines.length - 1}
-								style={{
-									padding: '6px 10px',
-									borderRadius: 6,
-									border: '1px solid #ddd',
-									cursor: 'pointer'
-								}}
-							>
-								Next
-							</button>
-						</div>
-
-						<div>
-							<span>
-								Line {currentIndex + 1} of {readerLines.length}
-							</span>
-						</div>
-
-						<button
-							onClick={markDone}
+			<ul style={{ listStyle: 'none', padding: 0, marginTop: 16 }}>
+				{items.map((item) => {
+					const key = `${item.kind}-${item.line.lineId}`;
+					const isReader = item.kind === 'reader';
+					const isActor = item.kind === 'actor';
+					const isRecording = isReader && activeRecordingLineId === item.line.lineId;
+					const hasRecording = isReader && !!(item.line as ReaderLine).audioUrl;
+					const isPlaying = isActor && playingLineId === item.line.lineId;
+					return (
+						<li
+							key={key}
 							style={{
-								padding: '8px 12px',
-								borderRadius: 6,
-								border: 'none',
-								cursor: 'pointer',
-								background: session.status === 'completed' ? '#d4f7d4' : '#e0ffe0'
+								border: '1px solid #eee',
+								borderRadius: 12,
+								padding: 12,
+								marginBottom: 12,
+								background: '#fff'
 							}}
 						>
-							{session.status === 'completed' ? 'Marked as Done ✅' : 'Mark Scene as Done'}
-						</button>
-					</div>
-				</>
-			) : (
-				<p style={{ marginTop: 24 }}>There are no reader lines in this session yet.</p>
-			)}
+							<div
+								style={{
+									display: 'flex',
+									justifyContent: 'space-between',
+									alignItems: 'center',
+									gap: 12
+								}}
+							>
+								<div style={{ flex: 1 }}>
+									<div
+										style={{
+											fontSize: 16,
+											fontWeight: 800,
+											color: isReader ? 'var(--espresso)' : 'var(--onSecondaryContainer)',
+											// Reader uses transparent navy; Myself uses secondaryContainer
+											background: isReader ? 'rgba(61, 90, 128, 0.15)' : 'var(--secondaryContainer)',
+											display: 'inline-block',
+											padding: '2px 8px',
+											borderRadius: 999,
+											fontFamily: 'var(--font-mono)'
+										}}
+									>
+										{isReader ? 'READER' : 'MYSELF'}
+									</div>
+								</div>
+								<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+									{isReader ? (
+										<>
+											<button
+												onClick={
+													isRecording
+														? stopRecording
+														: () => startRecording(item.line as ReaderLine)
+												}
+												style={{
+													padding: '10px 12px',
+													borderRadius: 999,
+													border: '1px solid #ddd',
+													// Mic button uses transparent navy when idle; red-tint when recording
+													background: isRecording ? '#ffd6d6' : 'rgba(61, 90, 128, 0.12)',
+													color: '#3B2F2F',
+													cursor: 'pointer',
+													minWidth: 44,
+													display: 'inline-flex',
+													alignItems: 'center',
+													justifyContent: 'center'
+												}}
+												aria-label={isRecording ? 'Stop recording' : 'Record line'}
+											>
+												{isRecording ? <Square size={18} /> : <Mic size={18} />}
+											</button>
+											{hasRecording && (
+												<>
+													<button
+														onClick={() => playReader(item.line as ReaderLine)}
+														style={{
+															padding: '10px 12px',
+															borderRadius: 999,
+															border: '1px solid #ddd',
+															background: '#f6fbff',
+															color: '#3B2F2F',
+															cursor: 'pointer',
+															minWidth: 44,
+															display: 'inline-flex',
+															alignItems: 'center',
+															justifyContent: 'center'
+														}}
+														aria-label="Play your recording"
+													>
+														<Volume2 size={18} />
+													</button>
+													<Check size={18} color="#2ecc71" aria-label="Recorded" />
+												</>
+											)}
+										</>
+									) : (
+										<button
+											onClick={() => handlePlayActor(item.line as ActorLine)}
+											disabled={!(item.line as ActorLine).audioUrl}
+											style={{
+												padding: '10px 12px',
+												borderRadius: 999,
+												border: '1px solid #ddd',
+												background: '#f6fbff',
+												color: '#3B2F2F',
+												cursor: (item.line as ActorLine).audioUrl
+													? 'pointer'
+													: 'not-allowed',
+												minWidth: 44,
+												display: 'inline-flex',
+												alignItems: 'center',
+												justifyContent: 'center',
+												opacity: (item.line as ActorLine).audioUrl ? 1 : 0.5
+											}}
+											aria-label="Play actor line"
+										>
+											<Volume2 size={18} />
+										</button>
+									)}
+								</div>
+							</div>
+							{/* Centered line text */}
+							<div
+								style={{
+									marginTop: 8,
+									textAlign: 'left',
+									color: '#3B2F2F',
+									whiteSpace: 'pre-wrap',
+									lineHeight: 1.5,
+									fontFamily: 'var(--font-mono)',
+									fontSize: 16
+								}}
+							>
+								{item.line.text}
+							</div>
+						</li>
+					);
+				})}
+			</ul>
+
+			<div style={{ position: 'sticky', bottom: 0, background: '#fff', paddingTop: 8 }}>
+				<button
+					onClick={markDone}
+					disabled={!allRecorded}
+					style={{
+						width: '100%',
+						padding: '12px 16px',
+						borderRadius: 10,
+						border: 'none',
+						cursor: allRecorded ? 'pointer' : 'not-allowed',
+						background: '#3D5A80',
+						color: '#ffffff',
+						fontWeight: 700
+					}}
+				>
+					{allRecorded ? 'Submit Lines' : 'Record all reader lines to submit'}
+				</button>
+			</div>
 		</div>
 	);
 }

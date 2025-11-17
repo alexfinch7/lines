@@ -1,15 +1,18 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+const advercase = localFont({
+  src: "../fonts/Advercase.otf",
+  variable: "--font-display",
 });
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+const dmMono = localFont({
+  src: "../fonts/DMMono-Regular.ttf",
+  variable: "--font-mono",
+});
+const interTight = localFont({
+  src: "../fonts/InterTight-VariableFont_wght.ttf",
+  variable: "--font-sans",
 });
 
 export const metadata: Metadata = {
@@ -24,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className={`${advercase.variable} ${dmMono.variable} ${interTight.variable}`}>
         {children}
       </body>
     </html>
