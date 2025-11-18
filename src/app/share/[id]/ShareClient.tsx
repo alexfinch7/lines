@@ -49,9 +49,16 @@ export default function ShareClient({ initialSession }: Props) {
 			});
 		});
 
+	// Avoid stale browser cache when a line is re-recorded by appending
+	// a cache-busting query param for playback only (DB URL stays canonical).
+	const withCacheBust = (url: string) => {
+		const sep = url.includes('?') ? '&' : '?';
+		return `${url}${sep}t=${Date.now()}`;
+	};
+
 	const handlePlayActor = async (actor?: ActorLine) => {
 		if (!actor || !actor.audioUrl) return;
-		await playAudio(actor.audioUrl, actor.lineId);
+		await playAudio(withCacheBust(actor.audioUrl), actor.lineId);
 	};
 
 	const startRecording = async (reader: ReaderLine) => {
@@ -154,7 +161,7 @@ export default function ShareClient({ initialSession }: Props) {
 
 	const playReader = async (reader: ReaderLine) => {
 		if (!reader.audioUrl) return;
-		await playAudio(reader.audioUrl, reader.lineId);
+		await playAudio(withCacheBust(reader.audioUrl), reader.lineId);
 	};
 
 	return (
