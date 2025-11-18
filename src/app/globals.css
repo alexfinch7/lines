@@ -10,6 +10,8 @@
   --clay30: rgba(203, 168, 134, 0.3); /* outlineVariant */
   --secondaryContainer: var(--clay20);
   --onSecondaryContainer: var(--espresso);
+  --readerHighlightBlue: #EAF3FF; /* light highlight blue for reader */
+  --readerHighlightBlueStrong: #DDEBFF; /* slightly stronger but still bright */
 }
 
 html,

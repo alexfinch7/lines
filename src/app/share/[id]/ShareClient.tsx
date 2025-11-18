@@ -15,6 +15,7 @@ export default function ShareClient({ initialSession }: Props) {
 	const [playingLineId, setPlayingLineId] = useState<string | null>(null);
 
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+	const streamRef = useRef<MediaStream | null>(null);
 	const chunksRef = useRef<Blob[]>([]);
 
 	const actorLines = useMemo(() => session.actor_lines || [], [session.actor_lines]);
@@ -54,9 +55,15 @@ export default function ShareClient({ initialSession }: Props) {
 	};
 
 	const startRecording = async (reader: ReaderLine) => {
+		// Prevent starting a new recording while one is in progress
 		if (activeRecordingLineId) return;
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			// Reuse a single audio stream for all recordings to avoid repeated permission / lag
+			let stream = streamRef.current;
+			if (!stream) {
+				stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+				streamRef.current = stream;
+			}
 			const recorder = new MediaRecorder(stream);
 			mediaRecorderRef.current = recorder;
 			chunksRef.current = [];
@@ -70,7 +77,7 @@ export default function ShareClient({ initialSession }: Props) {
 			recorder.onstop = async () => {
 				const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
 				await uploadRecording(blob, reader.lineId);
-				stream.getTracks().forEach((t) => t.stop());
+				// Keep the stream alive for subsequent recordings; only clear UI state here.
 				setActiveRecordingLineId(null);
 			};
 
@@ -84,7 +91,9 @@ export default function ShareClient({ initialSession }: Props) {
 
 	const stopRecording = () => {
 		const recorder = mediaRecorderRef.current;
-		if (recorder && activeRecordingLineId) {
+		if (recorder && recorder.state === 'recording') {
+			// Clear UI state immediately so the button responds instantly
+			setActiveRecordingLineId(null);
 			recorder.stop();
 		}
 	};
@@ -189,16 +198,16 @@ export default function ShareClient({ initialSession }: Props) {
 										style={{
 											fontSize: 16,
 											fontWeight: 800,
-											color: isReader ? 'var(--espresso)' : 'var(--onSecondaryContainer)',
-											// Reader uses transparent navy; Myself uses secondaryContainer
-											background: isReader ? 'rgba(61, 90, 128, 0.15)' : 'var(--secondaryContainer)',
+											color: 'var(--espresso)',
+											// Reader: light highlight blue; Actor: no highlight
+											background: isReader ? 'var(--readerHighlightBlue)' : 'transparent',
 											display: 'inline-block',
 											padding: '2px 8px',
 											borderRadius: 999,
 											fontFamily: 'var(--font-mono)'
 										}}
 									>
-										{isReader ? 'READER' : 'MYSELF'}
+										{isReader ? 'READER' : 'ACTOR'}
 									</div>
 								</div>
 								<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -214,8 +223,8 @@ export default function ShareClient({ initialSession }: Props) {
 													padding: '10px 12px',
 													borderRadius: 999,
 													border: '1px solid #ddd',
-													// Mic button uses transparent navy when idle; red-tint when recording
-													background: isRecording ? '#ffd6d6' : 'rgba(61, 90, 128, 0.12)',
+													// Mic button uses light highlight blue when idle; red-tint when recording
+													background: isRecording ? '#ffd6d6' : 'var(--readerHighlightBlue)',
 													color: '#3B2F2F',
 													cursor: 'pointer',
 													minWidth: 44,
@@ -235,7 +244,7 @@ export default function ShareClient({ initialSession }: Props) {
 															padding: '10px 12px',
 															borderRadius: 999,
 															border: '1px solid #ddd',
-															background: '#f6fbff',
+															background: 'var(--readerHighlightBlue)',
 															color: '#3B2F2F',
 															cursor: 'pointer',
 															minWidth: 44,
@@ -259,7 +268,7 @@ export default function ShareClient({ initialSession }: Props) {
 												padding: '10px 12px',
 												borderRadius: 999,
 												border: '1px solid #ddd',
-												background: '#f6fbff',
+												background: '#f5f5f5',
 												color: '#3B2F2F',
 												cursor: (item.line as ActorLine).audioUrl
 													? 'pointer'
@@ -277,7 +286,7 @@ export default function ShareClient({ initialSession }: Props) {
 									)}
 								</div>
 							</div>
-							{/* Centered line text */}
+							{/* Line text (highlight reader only as selection/marker style) */}
 							<div
 								style={{
 									marginTop: 8,
@@ -289,7 +298,24 @@ export default function ShareClient({ initialSession }: Props) {
 									fontSize: 16
 								}}
 							>
-								{item.line.text}
+								{isReader ? (
+									<span
+										style={{
+											// Thicker, more visible repeating marker highlight (still bright)
+											backgroundImage:
+												'linear-gradient(transparent 0, transparent 26%, var(--readerHighlightBlueStrong) 26%, var(--readerHighlightBlueStrong) 92%, transparent 92%, transparent 100%)',
+											backgroundSize: '100% 1.8em',
+											backgroundRepeat: 'repeat-y',
+											backgroundPosition: '0 0.05em',
+											boxDecorationBreak: 'clone',
+											WebkitBoxDecorationBreak: 'clone'
+										}}
+									>
+										{item.line.text}
+									</span>
+								) : (
+									item.line.text
+								)}
 							</div>
 						</li>
 					);
@@ -308,7 +334,8 @@ export default function ShareClient({ initialSession }: Props) {
 						cursor: allRecorded ? 'pointer' : 'not-allowed',
 						background: '#3D5A80',
 						color: '#ffffff',
-						fontWeight: 700
+						fontWeight: 700,
+						fontSize: 16
 					}}
 				>
 					{allRecorded ? 'Submit Lines' : 'Record all reader lines to submit'}
