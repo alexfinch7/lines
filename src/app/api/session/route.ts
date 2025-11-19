@@ -1,4 +1,5 @@
 // src/app/api/session/route.ts
+import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { supabaseAdmin, supabaseAnon } from '@/lib/supabaseServer';
 import type { ActorLine, ReaderLine, ShareSession } from '@/types/share';
@@ -134,10 +135,50 @@ export async function GET(request: Request) {
 			reader_lines: mergedReader
 		};
 
-		return NextResponse.json({ session: hydratedSession });
+		const sceneVersion = crypto
+			.createHash('sha1')
+			.update(
+				JSON.stringify({
+					actor: mergedActor.map((l) => ({
+						id: l.lineId,
+						idx: l.index,
+						text: l.text
+					})),
+					reader: mergedReader.map((l) => ({
+						id: l.lineId,
+						idx: l.index,
+						text: l.text
+					}))
+				})
+			)
+			.digest('hex');
+
+		return NextResponse.json({ session: hydratedSession, sceneVersion });
 	}
 
-	// Fallback: if we couldn't load live lines, just return the stored snapshot.
-	return NextResponse.json({ session: baseSession as ShareSession });
+	// Fallback: if we couldn't load live lines, just return the stored snapshot with a
+	// version derived from the stored actor/reader lines.
+	const snapshotSession = baseSession as ShareSession;
+	const sceneVersion = crypto
+		.createHash('sha1')
+		.update(
+			JSON.stringify({
+				actor:
+					snapshotSession.actor_lines?.map((l) => ({
+						id: l.lineId,
+						idx: l.index,
+						text: l.text
+					})) ?? [],
+				reader:
+					snapshotSession.reader_lines?.map((l) => ({
+						id: l.lineId,
+						idx: l.index,
+						text: l.text
+					})) ?? []
+			})
+		)
+		.digest('hex');
+
+	return NextResponse.json({ session: snapshotSession, sceneVersion });
 }
 

@@ -1,6 +1,5 @@
 // src/app/share/[id]/page.tsx
 import Link from 'next/link';
-import { supabaseAnon } from '@/lib/supabaseServer';
 import type { ShareSession } from '@/types/share';
 import ShareClient from './ShareClient';
 
@@ -11,13 +10,13 @@ type Props = {
 export default async function SharePage({ params }: Props) {
 	const { id } = await params;
 
-	const { data, error } = await supabaseAnon
-		.from('share_sessions')
-		.select('*')
-		.eq('id', id)
-		.single();
+	const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+	const res = await fetch(`${baseUrl}/api/session?id=${id}`, {
+		// Always fetch fresh data so script edits are reflected immediately
+		cache: 'no-store'
+	});
 
-	if (error || !data) {
+	if (!res.ok) {
 		return (
 			<main style={{ padding: 24 }}>
 				<h1>Session not found</h1>
@@ -27,10 +26,14 @@ export default async function SharePage({ params }: Props) {
 		);
 	}
 
-	const session = data as ShareSession;
+	const { session, sceneVersion } = (await res.json()) as {
+		session: ShareSession;
+		sceneVersion?: string;
+	};
+
 	return (
 		<main style={{ padding: 24, maxWidth: 800, margin: '0 auto' }}>
-			<ShareClient initialSession={session} />
+			<ShareClient initialSession={session} initialSceneVersion={sceneVersion} />
 		</main>
 	);
 }

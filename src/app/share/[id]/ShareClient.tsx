@@ -7,10 +7,12 @@ import type { ShareSession, ActorLine, ReaderLine } from '@/types/share';
 
 type Props = {
 	initialSession: ShareSession;
+	initialSceneVersion?: string;
 };
 
-export default function ShareClient({ initialSession }: Props) {
+export default function ShareClient({ initialSession, initialSceneVersion }: Props) {
 	const [session, setSession] = useState<ShareSession>(initialSession);
+	const [sceneVersion, setSceneVersion] = useState<string | undefined>(initialSceneVersion);
 	const [activeRecordingLineId, setActiveRecordingLineId] = useState<string | null>(null);
 	const [playingLineId, setPlayingLineId] = useState<string | null>(null);
 
@@ -141,6 +143,31 @@ export default function ShareClient({ initialSession }: Props) {
 			);
 			return { ...prev, reader_lines: updatedReaderLines };
 		});
+
+		// After each successful line recording, check whether the underlying scene
+		// has changed on the server compared to what the guest initially loaded.
+		// If it has, prompt them to reload before continuing.
+		if (sceneVersion && session.id) {
+			try {
+				const res = await fetch(`/api/session?id=${session.id}`, {
+					method: 'GET',
+					headers: { Accept: 'application/json' },
+					cache: 'no-store'
+				});
+				if (res.ok) {
+					const data = (await res.json()) as { sceneVersion?: string };
+					if (data.sceneVersion && data.sceneVersion !== sceneVersion) {
+						setSceneVersion(data.sceneVersion);
+						alert(
+							"Uh-Oh! It seems like the scene you're reading for is actively being edited. " +
+								'Please reload the page after your actor finalizes their changes.'
+						);
+					}
+				}
+			} catch (e) {
+				console.error('Failed to check scene version', e);
+			}
+		}
 	};
 
 	const markDone = async () => {
