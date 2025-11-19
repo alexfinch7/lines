@@ -1,6 +1,6 @@
 // src/app/api/session/line/route.ts
 import { NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabaseServer';
+import { supabaseAdmin } from '@/lib/supabaseServer';
 import type { ShareSession, ReaderLine } from '@/types/share';
 
 export async function POST(request: Request) {
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
 			);
 		}
 
-		const { data, error } = await supabaseServer
+		const { data, error } = await supabaseAdmin
 			.from('share_sessions')
 			.select('*')
 			.eq('id', sessionId)
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
 			line.lineId === lineId ? { ...line, audioUrl } : line
 		);
 
-		const { error: updateError } = await supabaseServer
+		const { error: updateError } = await supabaseAdmin
 			.from('share_sessions')
 			.update({ reader_lines: updatedReaderLines })
 			.eq('id', sessionId);

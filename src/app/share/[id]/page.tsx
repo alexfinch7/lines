@@ -1,6 +1,6 @@
 // src/app/share/[id]/page.tsx
 import Link from 'next/link';
-import { supabaseServer } from '@/lib/supabaseServer';
+import { createSupabaseServerClient } from '@/lib/supabaseServer';
 import type { ShareSession } from '@/types/share';
 import ShareClient from './ShareClient';
 
@@ -9,9 +9,10 @@ type Props = {
 };
 
 export default async function SharePage({ params }: Props) {
+	const supabase = createSupabaseServerClient();
 	const { id } = await params;
 
-	const { data, error } = await supabaseServer
+	const { data, error } = await supabase
 		.from('share_sessions')
 		.select('*')
 		.eq('id', id)

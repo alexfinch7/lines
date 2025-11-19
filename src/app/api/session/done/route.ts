@@ -1,6 +1,6 @@
 // src/app/api/session/done/route.ts
 import { NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabaseServer';
+import { supabaseAdmin } from '@/lib/supabaseServer';
 import type { ShareSession, ReaderLine } from '@/types/share';
 
 export async function POST(request: Request) {
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 		}
 
-		const { data, error } = await supabaseServer
+		const { data, error } = await supabaseAdmin
 			.from('share_sessions')
 			.select('*')
 			.eq('id', id)
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
 			// For stricter behavior, return 400 here instead.
 		}
 
-		const { error: updateError } = await supabaseServer
+		const { error: updateError } = await supabaseAdmin
 			.from('share_sessions')
 			.update({ status: 'completed' })
 			.eq('id', id);
