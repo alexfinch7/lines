@@ -10,8 +10,14 @@ type Props = {
 export default async function SharePage({ params }: Props) {
 	const { id } = await params;
 
-	const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-	const res = await fetch(`${baseUrl}/api/session?id=${id}`, {
+	// Use absolute URL in production (when NEXT_PUBLIC_BASE_URL is set), and a
+	// relative URL in development. Avoid hard-coding localhost so serverless
+	// environments (e.g. Vercel) don't try to call 127.0.0.1:3000.
+	const apiUrl = process.env.NEXT_PUBLIC_BASE_URL
+		? `${process.env.NEXT_PUBLIC_BASE_URL}/api/session?id=${id}`
+		: `/api/session?id=${id}`;
+
+	const res = await fetch(apiUrl, {
 		// Always fetch fresh data so script edits are reflected immediately
 		cache: 'no-store'
 	});
