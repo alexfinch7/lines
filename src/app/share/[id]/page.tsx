@@ -1,5 +1,6 @@
 // src/app/share/[id]/page.tsx
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import type { ShareSession } from '@/types/share';
 import ShareClient from './ShareClient';
 
@@ -10,12 +11,14 @@ type Props = {
 export default async function SharePage({ params }: Props) {
 	const { id } = await params;
 
-	// Use absolute URL in production (when NEXT_PUBLIC_BASE_URL is set), and a
-	// relative URL in development. Avoid hard-coding localhost so serverless
-	// environments (e.g. Vercel) don't try to call 127.0.0.1:3000.
-	const apiUrl = process.env.NEXT_PUBLIC_BASE_URL
-		? `${process.env.NEXT_PUBLIC_BASE_URL}/api/session?id=${id}`
-		: `/api/session?id=${id}`;
+	// Always construct an absolute URL for the internal API call so it works
+	// in serverless environments where relative URLs are not supported.
+	const hdrs = headers();
+	const host = hdrs.get('host');
+	const proto = hdrs.get('x-forwarded-proto') ?? 'https';
+	const originFromHeaders = host ? `${proto}://${host}` : null;
+	const origin = process.env.NEXT_PUBLIC_BASE_URL ?? originFromHeaders ?? 'http://localhost:3000';
+	const apiUrl = `${origin}/api/session?id=${id}`;
 
 	const res = await fetch(apiUrl, {
 		// Always fetch fresh data so script edits are reflected immediately
