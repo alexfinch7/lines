@@ -102,8 +102,19 @@ export async function GET(request: Request) {
 		.eq('script_id', baseSession.scene_id);
 
 	if (!liveLinesError && liveLines) {
+		const canonicalLines = (liveLines as { id: string; raw_text: string; order_index: number | null }[]).sort(
+			(a, b) => {
+				if (a.order_index === b.order_index) {
+					return a.id.localeCompare(b.id);
+				}
+				if (a.order_index == null) return 1;
+				if (b.order_index == null) return -1;
+				return a.order_index - b.order_index;
+			}
+		);
+
 		const byId = new Map<string, { raw_text: string; order_index: number | null }>();
-		for (const line of liveLines as { id: string; raw_text: string; order_index: number | null }[]) {
+		for (const line of canonicalLines) {
 			byId.set(line.id, {
 				raw_text: line.raw_text,
 				order_index: line.order_index
@@ -136,21 +147,18 @@ export async function GET(request: Request) {
 			reader_lines: mergedReader
 		};
 
+		// Scene version is derived from the full canonical line list, so additions/removals
+		// of lines (not just text changes) are detected as well.
 		const sceneVersion = crypto
 			.createHash('sha1')
 			.update(
-				JSON.stringify({
-					actor: mergedActor.map((l) => ({
-						id: l.lineId,
-						idx: l.index,
-						text: l.text
-					})),
-					reader: mergedReader.map((l) => ({
-						id: l.lineId,
-						idx: l.index,
-						text: l.text
+				JSON.stringify(
+					canonicalLines.map((l) => ({
+						id: l.id,
+						idx: l.order_index,
+						text: l.raw_text
 					}))
-				})
+				)
 			)
 			.digest('hex');
 
