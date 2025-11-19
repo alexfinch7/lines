@@ -13,6 +13,7 @@ type Props = {
 export default function ShareClient({ initialSession, initialSceneVersion }: Props) {
 	const [session, setSession] = useState<ShareSession>(initialSession);
 	const [sceneVersion, setSceneVersion] = useState<string | undefined>(initialSceneVersion);
+	const [sceneOutOfDate, setSceneOutOfDate] = useState(false);
 	const [activeRecordingLineId, setActiveRecordingLineId] = useState<string | null>(null);
 	const [playingLineId, setPlayingLineId] = useState<string | null>(null);
 
@@ -64,6 +65,16 @@ export default function ShareClient({ initialSession, initialSceneVersion }: Pro
 	};
 
 	const startRecording = async (reader: ReaderLine) => {
+		// If the scene has been edited while the guest is recording, prevent further
+		// recording until they reload to see the latest version.
+		if (sceneOutOfDate) {
+			alert(
+				"Uh-Oh! It seems like the scene you're reading for is actively being edited. " +
+					'Please reload the page after your actor finalizes their changes.'
+			);
+			return;
+		}
+
 		// Prevent starting a new recording while one is in progress
 		if (activeRecordingLineId) return;
 		try {
@@ -158,6 +169,7 @@ export default function ShareClient({ initialSession, initialSceneVersion }: Pro
 					const data = (await res.json()) as { sceneVersion?: string };
 					if (data.sceneVersion && data.sceneVersion !== sceneVersion) {
 						setSceneVersion(data.sceneVersion);
+						setSceneOutOfDate(true);
 						alert(
 							"Uh-Oh! It seems like the scene you're reading for is actively being edited. " +
 								'Please reload the page after your actor finalizes their changes.'
@@ -171,6 +183,14 @@ export default function ShareClient({ initialSession, initialSceneVersion }: Pro
 	};
 
 	const markDone = async () => {
+		if (sceneOutOfDate) {
+			alert(
+				"Uh-Oh! It seems like the scene you're reading for is actively being edited. " +
+					'Please reload the page after your actor finalizes their changes before submitting.'
+			);
+			return;
+		}
+
 		const res = await fetch('/api/session/done', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -359,7 +379,7 @@ export default function ShareClient({ initialSession, initialSceneVersion }: Pro
 			<div style={{ position: 'sticky', bottom: 0, background: '#fff', paddingTop: 8 }}>
 				<button
 					onClick={markDone}
-					disabled={!allRecorded}
+					disabled={sceneOutOfDate || !allRecorded}
 					style={{
 						width: '100%',
 						padding: '12px 16px',

@@ -95,7 +95,8 @@ export async function GET(request: Request) {
 	// 2) Try to hydrate actor/reader line text and ordering from the live script lines table.
 	// This lets share links always reflect the latest script edits while still preserving
 	// any existing recording URLs stored on the share session.
-	const { data: liveLines, error: liveLinesError } = await supabaseAnon
+	// Use the admin client here so we bypass RLS and always see the canonical script.
+	const { data: liveLines, error: liveLinesError } = await supabaseAdmin
 		.from('lines')
 		.select('id, raw_text, order_index')
 		.eq('script_id', baseSession.scene_id);
