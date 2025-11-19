@@ -1,18 +1,10 @@
 // src/app/api/session/route.ts
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient, supabaseAdmin } from '@/lib/supabaseServer';
+import { supabaseAdmin, supabaseAnon } from '@/lib/supabaseServer';
 import type { ActorLine, ReaderLine, ShareSession } from '@/types/share';
 
 async function getUserFromRequest(request: Request) {
-	// 1) Try cookie-based (web)
-	const supabase = createSupabaseServerClient();
-	const {
-		data: { user }
-	} = await supabase.auth.getUser();
-
-	if (user) return { user };
-
-	// 2) Fallback: Authorization: Bearer <token> (mobile)
+	// Mobile / API: Authorization: Bearer <token>
 	const authHeader = request.headers.get('authorization');
 	if (!authHeader?.startsWith('Bearer ')) return { user: null };
 
@@ -44,9 +36,7 @@ export async function POST(request: Request) {
 			);
 		}
 
-		const supabase = createSupabaseServerClient();
-
-		const { data, error } = await supabase
+		const { data, error } = await supabaseAnon
 			.from('share_sessions')
 			.insert({
 				title,
@@ -80,8 +70,6 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-	const supabase = createSupabaseServerClient();
-
 	// For convenience: /api/session?id=...
 	const { searchParams } = new URL(request.url);
 	const id = searchParams.get('id');
@@ -90,7 +78,7 @@ export async function GET(request: Request) {
 		return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 	}
 
-	const { data, error } = await supabase
+	const { data, error } = await supabaseAnon
 		.from('share_sessions')
 		.select('*')
 		.eq('id', id)

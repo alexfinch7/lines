@@ -1,7 +1,5 @@
 // src/lib/supabaseServer.ts
 // src/lib/supabaseServer.ts
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -13,23 +11,9 @@ export const supabaseAdmin = createClient(url, serviceKey, {
 	auth: { persistSession: false }
 });
 
-// Cookie-aware server client (for web requests using browser sessions)
-export function createSupabaseServerClient() {
-	const cookieStore = cookies() as any;
-
-	return createServerClient(url, anonKey, {
-		cookies: {
-			getAll() {
-				return cookieStore.getAll();
-			},
-			setAll(
-				cookiesToSet: { name: string; value: string; options: Record<string, unknown> }[]
-			) {
-				cookiesToSet.forEach(({ name, value, options }) => {
-					cookieStore.set(name, value, options);
-				});
-			}
-		}
-	});
-}
+// Anonymous server-side client (no cookies; used for public reads and writes that
+// don't rely on browser sessions)
+export const supabaseAnon = createClient(url, anonKey, {
+	auth: { persistSession: false }
+});
 
