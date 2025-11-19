@@ -75,9 +75,10 @@ export async function GET(request: Request) {
 	const id = searchParams.get('id');
 
 	if (!id) {
-		return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+	return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 	}
 
+	// 1) Load the stored share session (includes scene_id and any existing audio URLs)
 	const { data, error } = await supabaseAnon
 		.from('share_sessions')
 		.select('*')
@@ -88,7 +89,55 @@ export async function GET(request: Request) {
 		return NextResponse.json({ error: 'Not found' }, { status: 404 });
 	}
 
-	const session = data as ShareSession;
-	return NextResponse.json({ session });
+	const baseSession = data as ShareSession & { scene_id: string };
+
+	// 2) Try to hydrate actor/reader line text and ordering from the live script lines table.
+	// This lets share links always reflect the latest script edits while still preserving
+	// any existing recording URLs stored on the share session.
+	const { data: liveLines, error: liveLinesError } = await supabaseAnon
+		.from('lines')
+		.select('id, raw_text, order_index')
+		.eq('script_id', baseSession.scene_id);
+
+	if (!liveLinesError && liveLines) {
+		const byId = new Map<string, { raw_text: string; order_index: number | null }>();
+		for (const line of liveLines as { id: string; raw_text: string; order_index: number | null }[]) {
+			byId.set(line.id, {
+				raw_text: line.raw_text,
+				order_index: line.order_index
+			});
+		}
+
+		const mergedActor =
+			baseSession.actor_lines?.map((l) => {
+				const canonical = byId.get(l.lineId);
+				return {
+					...l,
+					text: canonical?.raw_text ?? l.text,
+					index: canonical?.order_index ?? l.index
+				};
+			}) ?? [];
+
+		const mergedReader =
+			baseSession.reader_lines?.map((l) => {
+				const canonical = byId.get(l.lineId);
+				return {
+					...l,
+					text: canonical?.raw_text ?? l.text,
+					index: canonical?.order_index ?? l.index
+				};
+			}) ?? [];
+
+		const hydratedSession: ShareSession = {
+			...baseSession,
+			actor_lines: mergedActor,
+			reader_lines: mergedReader
+		};
+
+		return NextResponse.json({ session: hydratedSession });
+	}
+
+	// Fallback: if we couldn't load live lines, just return the stored snapshot.
+	return NextResponse.json({ session: baseSession as ShareSession });
 }
 
