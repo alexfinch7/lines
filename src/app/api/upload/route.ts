@@ -1,6 +1,6 @@
 // src/app/api/upload/route.ts
 import { NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabaseServer';
+import { supabaseAdmin } from '@/lib/supabaseServer';
 
 export const runtime = 'nodejs';
 
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 		const prefix = role === 'actor' ? 'actor' : 'reader';
 		const path = `${prefix}/${sessionId}/${lineId}.${ext}`;
 
-		const { error: uploadError } = await supabaseServer.storage
+		const { error: uploadError } = await supabaseAdmin.storage
 			.from('reader-recordings')
 			.upload(path, buffer, {
 				contentType: file.type || 'audio/webm',
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
 
 		const {
 			data: { publicUrl }
-		} = supabaseServer.storage.from('reader-recordings').getPublicUrl(path);
+		} = supabaseAdmin.storage.from('reader-recordings').getPublicUrl(path);
 
 		return NextResponse.json({ url: publicUrl });
 	} catch (e) {
@@ -51,5 +51,4 @@ export async function POST(request: Request) {
 		return NextResponse.json({ error: 'Unexpected error' }, { status: 500 });
 	}
 }
-
 
