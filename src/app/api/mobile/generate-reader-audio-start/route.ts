@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import type { ReaderAudioJob } from '../readerAudioJobs';
 import { readerAudioJobs } from '../readerAudioJobs';
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 export const runtime = 'nodejs';
 
@@ -33,39 +34,34 @@ async function processJob(jobId: string, body: StartRequestBody) {
 			);
 		}
 
+		const client = new ElevenLabsClient({
+			apiKey: elevenKey
+		});
+
 		const audioResults: ReaderAudioJob['audio'] = [];
 
 		for (const [lineId, _role, text, preferredVoice] of body.lines) {
 			const voiceId =
 				preferredVoice === 'male_presenting' ? maleVoiceId : femaleVoiceId;
 
-			const ttsRes = await fetch(
-				`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-				{
-					method: 'POST',
-					headers: {
-						'xi-api-key': elevenKey,
-						'Content-Type': 'application/json',
-						Accept: 'audio/mpeg'
-					},
-					body: JSON.stringify({
-						text,
-						model_id: 'eleven_multilingual_v2',
-						voice_settings: {
-							stability: 0.5,
-							similarity_boost: 0.75
-						}
-					})
-				}
-			);
+			let audioBuffer: Buffer;
+			try {
+				const audioBytes = await client.textToSpeech.convert(voiceId, {
+					text,
+					modelId: 'eleven_multilingual_v2',
+					voiceSettings: {
+						stability: 0.5,
+						similarityBoost: 0.75
+					}
+				});
 
-			if (!ttsRes.ok) {
-				const errText = await ttsRes.text().catch(() => 'Unknown TTS error');
-				console.error('ElevenLabs TTS error for line', lineId, errText);
+				audioBuffer = Buffer.isBuffer(audioBytes)
+					? audioBytes
+					: Buffer.from(audioBytes as Uint8Array);
+			} catch (err) {
+				console.error('ElevenLabs SDK TTS error for line', lineId, err);
 				throw new Error('Failed to generate reader audio from ElevenLabs.');
 			}
-
-			const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
 
 			const path = `tts/${body.sceneId}/${lineId}.mp3`;
 			const { error: uploadError } = await supabaseAdmin.storage
