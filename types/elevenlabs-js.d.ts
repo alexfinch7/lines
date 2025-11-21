@@ -13,7 +13,7 @@ declare module '@elevenlabs/elevenlabs-js' {
 						similarityBoost?: number;
 					};
 				}
-			): Promise<Uint8Array | Buffer>;
+			): Promise<Uint8Array | Buffer | ReadableStream>;
 		};
 	}
 }

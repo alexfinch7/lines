@@ -46,7 +46,7 @@ async function processJob(jobId: string, body: StartRequestBody) {
 
 			let audioBuffer: Buffer;
 			try {
-				const audioBytes = await client.textToSpeech.convert(voiceId, {
+				const audioResult = await client.textToSpeech.convert(voiceId, {
 					text,
 					modelId: 'eleven_multilingual_v2',
 					voiceSettings: {
@@ -55,9 +55,16 @@ async function processJob(jobId: string, body: StartRequestBody) {
 					}
 				});
 
-				audioBuffer = Buffer.isBuffer(audioBytes)
-					? audioBytes
-					: Buffer.from(audioBytes as Uint8Array);
+				if (audioResult instanceof ReadableStream) {
+					// SDK returned a web ReadableStream – consume it fully into a Buffer
+					const arrayBuffer = await new Response(audioResult).arrayBuffer();
+					audioBuffer = Buffer.from(arrayBuffer);
+				} else if (Buffer.isBuffer(audioResult)) {
+					audioBuffer = audioResult;
+				} else {
+					// Assume Uint8Array or ArrayBuffer-like
+					audioBuffer = Buffer.from(audioResult as Uint8Array);
+				}
 			} catch (err) {
 				console.error('ElevenLabs SDK TTS error for line', lineId, err);
 				throw new Error('Failed to generate reader audio from ElevenLabs.');
