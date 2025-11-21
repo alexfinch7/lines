@@ -115,17 +115,26 @@ Now read the script text above and return ONLY the JSON object in the specified 
 		}
 
 		const openaiJson: any = await openaiRes.json();
-		// Python client exposes result.output_text; when calling HTTP directly, the text is in output[0].content[0].text.
+		// Log full OpenAI payload so we can debug schema / errors server-side.
+		console.log('OpenAI Responses raw JSON:', JSON.stringify(openaiJson, null, 2));
+
+		// Python client exposes result.output_text; with raw HTTP, the text is usually nested under
+		// output[0].content[0].text.value (or .text).
 		const rawText: string =
 			(typeof openaiJson.output_text === 'string'
 				? openaiJson.output_text
-				: openaiJson.output?.[0]?.content?.[0]?.text) ?? '';
+				: openaiJson.output?.[0]?.content?.[0]?.text?.value ??
+					openaiJson.output?.[0]?.content?.[0]?.text) ?? '';
 
 		let parsedLines: ParsedLines;
 		try {
 			parsedLines = JSON.parse(rawText) as ParsedLines;
 		} catch (e) {
-			console.error('Failed to parse JSON from OpenAI output:', rawText);
+			console.error('Failed to parse JSON from OpenAI output text:', rawText);
+			console.error(
+				'Full OpenAI JSON when parse failed:',
+				JSON.stringify(openaiJson, null, 2)
+			);
 			return NextResponse.json(
 				{ error: 'OpenAI response was not valid JSON.' },
 				{ status: 502 }
