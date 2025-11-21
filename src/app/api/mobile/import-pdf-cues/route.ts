@@ -118,13 +118,25 @@ Now read the script text above and return ONLY the JSON object in the specified 
 		// Log full OpenAI payload so we can debug schema / errors server-side.
 		console.log('OpenAI Responses raw JSON:', JSON.stringify(openaiJson, null, 2));
 
-		// Python client exposes result.output_text; with raw HTTP, the text is usually nested under
-		// output[0].content[0].text.value (or .text).
-		const rawText: string =
-			(typeof openaiJson.output_text === 'string'
-				? openaiJson.output_text
-				: openaiJson.output?.[0]?.content?.[0]?.text?.value ??
-					openaiJson.output?.[0]?.content?.[0]?.text) ?? '';
+		// Python client exposes result.output_text; with raw HTTP, we find the "message" entry and read its text.
+		let rawText: string | null = null;
+		if (typeof openaiJson.output_text === 'string') {
+			rawText = openaiJson.output_text;
+		} else if (Array.isArray(openaiJson.output)) {
+			const messageEntry = openaiJson.output.find((item: any) => item.type === 'message');
+			const firstContent = messageEntry?.content?.[0];
+			if (firstContent && typeof firstContent.text === 'string') {
+				rawText = firstContent.text;
+			}
+		}
+
+		if (!rawText || typeof rawText !== 'string') {
+			console.error('Unable to locate output_text in OpenAI response:', JSON.stringify(openaiJson, null, 2));
+			return NextResponse.json(
+				{ error: 'OpenAI response did not contain output text.' },
+				{ status: 502 }
+			);
+		}
 
 		let parsedLines: ParsedLines;
 		try {
