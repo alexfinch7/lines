@@ -1,9 +1,5 @@
 import { NextResponse } from 'next/server';
 import pdfParse from 'pdf-parse';
-import pdfPoppler from 'pdf-poppler';
-import * as fs from 'fs/promises';
-import os from 'os';
-import path from 'path';
 
 export const runtime = 'nodejs';
 
@@ -88,76 +84,60 @@ Example:
 Now read the script text above and return ONLY the JSON object in the specified format.
 `;
 
-		let input: string | any[]; // string for text-only, array for multimodal (images)
+		let input: string | any[]; // string for text-only, array for multimodal (PDF file)
 
 		if (scriptText.trim()) {
-			// Normal path: we have extracted text
+			// Normal path: we have extracted text locally
 			input = `${title}\n\n${scriptText}\n\n${command}`;
 		} else {
-			// Fallback path: PDF -> images -> vision model
-			// 2a) Write PDF buffer to a temporary file
-			const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pdf-pages-'));
-			const pdfPath = path.join(tmpDir, 'input.pdf');
-			await fs.writeFile(pdfPath, buffer);
+			// Fallback path: let OpenAI read the raw PDF directly via file upload
+			const uploadForm = new FormData();
+			uploadForm.append('file', file);
+			uploadForm.append('purpose', 'responses');
 
-			// 2b) Convert all pages to JPEG images
-			const options = {
-				format: 'jpeg',
-				out_dir: tmpDir,
-				out_prefix: 'page',
-				page: null as number | null // null = all pages
-			};
+			const uploadRes = await fetch('https://api.openai.com/v1/files', {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${apiKey}`
+				},
+				body: uploadForm
+			});
 
-			try {
-				// pdf-poppler will emit files like page-1.jpg, page-2.jpg, ...
-				// @ts-ignore - runtime API provided by pdf-poppler
-				await pdfPoppler.convert(pdfPath, options);
-			} catch (err) {
-				console.error('Error converting PDF to images with pdf-poppler:', err);
+			if (!uploadRes.ok) {
+				const uploadErr = await uploadRes.text().catch(() => 'Unknown error');
+				console.error('OpenAI file upload error', uploadErr);
 				return NextResponse.json(
-					{ error: 'Failed to convert PDF to images for cue extraction.' },
+					{ error: 'Failed to upload PDF to OpenAI for cue extraction.' },
 					{ status: 502 }
 				);
 			}
 
-			const files = await fs.readdir(tmpDir);
-			const imageFiles = files
-				.filter((name) => name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png'))
-				.sort();
+			const uploadJson: any = await uploadRes.json();
+			const fileId = uploadJson.id;
 
-			if (imageFiles.length === 0) {
+			if (!fileId || typeof fileId !== 'string') {
+				console.error('Unexpected OpenAI file upload response:', JSON.stringify(uploadJson, null, 2));
 				return NextResponse.json(
-					{ error: 'Parsed PDF was empty and no pages could be converted to images.' },
-					{ status: 400 }
+					{ error: 'OpenAI file upload did not return a valid file id.' },
+					{ status: 502 }
 				);
 			}
 
-			const imageDataUrls: string[] = [];
-			for (const fileName of imageFiles) {
-				const fullPath = path.join(tmpDir, fileName);
-				const imgBuffer = await fs.readFile(fullPath);
-				const base64 = imgBuffer.toString('base64');
-				const mime = fileName.endsWith('.png') ? 'image/png' : 'image/jpeg';
-				imageDataUrls.push(`data:${mime};base64,${base64}`);
-			}
+			const pdfPrompt = `${title}\n\nYou are given a PDF containing the script for a scene. Read all of the text from the PDF as the script, then follow the instructions below exactly.\n\n${command}`;
 
-			const visionPrompt = `${title}\n\nYou are given images of the script pages for a scene. Read all of the text from the images as the script, then follow the instructions below exactly.\n\n${command}`;
-
-			// Multimodal input for Responses API: one user message with text + all page images.
+			// Multimodal input for Responses API: user message with text + the uploaded PDF file.
 			input = [
 				{
 					role: 'user',
 					content: [
 						{
 							type: 'input_text',
-							text: visionPrompt
+							text: pdfPrompt
 						},
-						...imageDataUrls.map((url) => ({
-							type: 'input_image',
-							image_url: {
-								url
-							}
-						}))
+						{
+							type: 'input_file',
+							file_id: fileId
+						}
 					]
 				}
 			];
