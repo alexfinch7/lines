@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import pdfParse from 'pdf-parse';
+import pdfPoppler from 'pdf-poppler';
+import * as fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
 
 export const runtime = 'nodejs';
 
@@ -52,10 +56,6 @@ export async function POST(request: Request) {
 		const parsed = await pdfParse(buffer);
 		const scriptText = parsed.text ?? '';
 
-		if (!scriptText.trim()) {
-			return NextResponse.json({ error: 'Parsed PDF was empty.' }, { status: 400 });
-		}
-
 		// 2) Build command for OpenAI Responses API
 		const command = `
 You are a script cue extraction assistant.
@@ -88,7 +88,80 @@ Example:
 Now read the script text above and return ONLY the JSON object in the specified format.
 `;
 
-		const input = `${title}\n\n${scriptText}\n\n${command}`;
+		let input: string | any[]; // string for text-only, array for multimodal (images)
+
+		if (scriptText.trim()) {
+			// Normal path: we have extracted text
+			input = `${title}\n\n${scriptText}\n\n${command}`;
+		} else {
+			// Fallback path: PDF -> images -> vision model
+			// 2a) Write PDF buffer to a temporary file
+			const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pdf-pages-'));
+			const pdfPath = path.join(tmpDir, 'input.pdf');
+			await fs.writeFile(pdfPath, buffer);
+
+			// 2b) Convert all pages to JPEG images
+			const options = {
+				format: 'jpeg',
+				out_dir: tmpDir,
+				out_prefix: 'page',
+				page: null as number | null // null = all pages
+			};
+
+			try {
+				// pdf-poppler will emit files like page-1.jpg, page-2.jpg, ...
+				// @ts-ignore - runtime API provided by pdf-poppler
+				await pdfPoppler.convert(pdfPath, options);
+			} catch (err) {
+				console.error('Error converting PDF to images with pdf-poppler:', err);
+				return NextResponse.json(
+					{ error: 'Failed to convert PDF to images for cue extraction.' },
+					{ status: 502 }
+				);
+			}
+
+			const files = await fs.readdir(tmpDir);
+			const imageFiles = files
+				.filter((name) => name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png'))
+				.sort();
+
+			if (imageFiles.length === 0) {
+				return NextResponse.json(
+					{ error: 'Parsed PDF was empty and no pages could be converted to images.' },
+					{ status: 400 }
+				);
+			}
+
+			const imageDataUrls: string[] = [];
+			for (const fileName of imageFiles) {
+				const fullPath = path.join(tmpDir, fileName);
+				const imgBuffer = await fs.readFile(fullPath);
+				const base64 = imgBuffer.toString('base64');
+				const mime = fileName.endsWith('.png') ? 'image/png' : 'image/jpeg';
+				imageDataUrls.push(`data:${mime};base64,${base64}`);
+			}
+
+			const visionPrompt = `${title}\n\nYou are given images of the script pages for a scene. Read all of the text from the images as the script, then follow the instructions below exactly.\n\n${command}`;
+
+			// Multimodal input for Responses API: one user message with text + all page images.
+			input = [
+				{
+					role: 'user',
+					content: [
+						{
+							type: 'input_text',
+							text: visionPrompt
+						},
+						...imageDataUrls.map((url) => ({
+							type: 'input_image',
+							image_url: {
+								url
+							}
+						}))
+					]
+				}
+			];
+		}
 
 		// 3) Call OpenAI Responses API
 		const openaiRes = await fetch(OPENAI_API_URL, {
