@@ -24,9 +24,17 @@ export async function POST(request: Request) {
 		const title = (formData.get('title') as string | null) ?? 'Untitled Script';
 		const characterName = (formData.get('characterName') as string | null) ?? '';
 
-		if (!file || file.type !== 'application/pdf') {
+		if (!file) {
 			return NextResponse.json(
 				{ error: 'A PDF file is required under the "file" field.' },
+				{ status: 400 }
+			);
+		}
+
+		// Optional soft check: if a type is provided and it's clearly not a PDF, reject.
+		if (file.type && !file.type.toLowerCase().includes('pdf')) {
+			return NextResponse.json(
+				{ error: `Unexpected file type: ${file.type}` },
 				{ status: 400 }
 			);
 		}
