@@ -93,7 +93,8 @@ Now read the script text above and return ONLY the JSON object in the specified 
 			// Fallback path: let OpenAI read the raw PDF directly via file upload
 			const uploadForm = new FormData();
 			uploadForm.append('file', file);
-			uploadForm.append('purpose', 'vision');
+			// Use assistants-style purpose so the file can be attached as input_file
+			uploadForm.append('purpose', 'assistants');
 
 			const uploadRes = await fetch('https://api.openai.com/v1/files', {
 				method: 'POST',
