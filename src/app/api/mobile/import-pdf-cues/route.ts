@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60; // Grok can take ~20–40s on big PDFs
@@ -9,20 +8,15 @@ type ParsedLines = { lines: Cue[] };
 
 export async function POST(request: Request) {
 	try {
-		const apiKey = process.env.XAI_API_KEY;
-		if (!apiKey) {
-			return NextResponse.json(
-				{ error: 'Missing XAI_API_KEY server configuration' },
-				{ status: 500 }
-			);
-		}
-
 		const formData = await request.formData();
 		const file = formData.get('file') as File | null;
 		const characterName = (formData.get('characterName') as string | null)?.trim();
 
-		if (!file || !(file instanceof File)) {
-			return NextResponse.json({ error: 'PDF file is required' }, { status: 400 });
+		if (!file || !characterName) {
+			return NextResponse.json(
+				{ error: 'Missing file or characterName' },
+				{ status: 400 }
+			);
 		}
 
 		// Optional soft check: if a type is provided and it's clearly not a PDF, reject.
@@ -33,73 +27,109 @@ export async function POST(request: Request) {
 			);
 		}
 
-		if (!characterName) {
-			return NextResponse.json({ error: 'characterName is required' }, { status: 400 });
+		const apiKey = process.env.XAI_API_KEY;
+		if (!apiKey) {
+			return NextResponse.json({ error: 'Missing XAI_API_KEY' }, { status: 500 });
 		}
 
-		const client = new OpenAI({
-			apiKey,
-			baseURL: 'https://api.x.ai/v1'
+		// Step 1: Upload the PDF to xAI
+		const uploadForm = new FormData();
+		uploadForm.append('purpose', 'assistants');
+		uploadForm.append('file', file);
+
+		const uploadResponse = await fetch('https://api.x.ai/v1/files', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${apiKey}`
+			},
+			body: uploadForm
 		});
 
-		const prompt = `
-You are an expert casting assistant. Extract every spoken line of dialogue from the attached audition sides PDF.
+		if (!uploadResponse.ok) {
+			const err = await uploadResponse.text().catch(() => 'Unknown error');
+			console.error('File upload failed:', err);
+			return NextResponse.json({ error: 'Failed to upload PDF' }, { status: 502 });
+		}
 
-Rules:
-- Character names are in ALL CAPS before their lines (e.g. MAX, ZOE, MICHELLE)
-- The actor's character is "${characterName.toUpperCase()}". Any line under ${characterName.toUpperCase()}, ${
-			characterName.toUpperCase()
-		} (CONT’D), etc. belongs to them.
-- Mark their lines as "myself"
-- All other spoken lines are "reader"
-- Ignore stage directions, scene headings, page numbers, watermarks, everything except spoken dialogue
-- Return ONLY valid JSON in this exact shape:
+		const uploadedJson: any = await uploadResponse.json();
+		const file_id = uploadedJson?.id;
+
+		if (!file_id || typeof file_id !== 'string') {
+			console.error(
+				'Unexpected xAI file upload response:',
+				JSON.stringify(uploadedJson, null, 2)
+			);
+			return NextResponse.json(
+				{ error: 'xAI file upload did not return a valid file id.' },
+				{ status: 502 }
+			);
+		}
+
+		// Step 2: Send the uploaded file + prompt
+		const grokResponse = await fetch('https://api.x.ai/v1/chat/completions', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				model: 'grok-2-1212',
+				temperature: 0,
+				messages: [
+					{
+						role: 'user',
+						content: [
+							{
+								type: 'text',
+								text: `You are an expert casting assistant. Extract every spoken line from this audition sides PDF.
+
+Character: "${characterName.toUpperCase()}"
+
+- Their lines → "myself"
+- Everyone else → "reader"
+
+Return ONLY this JSON (no backticks, no extra text):
 
 {
   "lines": [
-    ["myself" | "reader", "Exact line of dialogue here"],
-    ...
+    ["myself" | "reader", "exact line here"]
   ]
-}
-`;
-
-		// Convert the uploaded PDF file to a data URL that Grok accepts as image_url.
-		const pdfDataUrl = await fileToDataURL(file);
-
-		const response = await client.chat.completions.create({
-			model: 'grok-2-1212', // or 'grok-beta' — both support PDF vision
-			temperature: 0,
-			max_tokens: 4096,
-			messages: [
-				{
-					role: 'user',
-					content: [
-						{ type: 'text', text: prompt },
-						{
-							type: 'image_url',
-							image_url: {
-								url: pdfDataUrl
+}`
+							},
+							{
+								type: 'file',
+								file_id
 							}
-						}
-					]
-				}
-			]
+						]
+					}
+				]
+			})
 		});
 
-		const messageContent = (response as any)?.choices?.[0]?.message?.content;
-		const raw =
-			typeof messageContent === 'string' ? (messageContent as string).trim() : '';
+		if (!grokResponse.ok) {
+			const err = await grokResponse.text().catch(() => 'Unknown error');
+			console.error('Grok API error:', err);
+			return NextResponse.json({ error: 'Grok processing failed' }, { status: 502 });
+		}
+
+		const data: any = await grokResponse.json();
+		const content = data?.choices?.[0]?.message?.content;
+		const raw = typeof content === 'string' ? (content as string).trim() : '';
 
 		if (!raw) {
-			return NextResponse.json({ error: 'Empty response from Grok' }, { status: 502 });
+			console.error('Empty or non-string content from Grok:', JSON.stringify(data, null, 2));
+			return NextResponse.json(
+				{ error: 'Empty response from Grok' },
+				{ status: 502 }
+			);
 		}
 
 		let parsed: ParsedLines;
 		try {
 			parsed = JSON.parse(raw) as ParsedLines;
 		} catch (e) {
-			console.error('Grok returned invalid JSON:', raw);
-			return NextResponse.json({ error: 'Invalid JSON from model' }, { status: 502 });
+			console.error('Invalid JSON from Grok:', raw);
+			return NextResponse.json({ error: 'Invalid response format' }, { status: 502 });
 		}
 
 		if (
@@ -126,11 +156,4 @@ Rules:
 	}
 }
 
-// Helper: convert File → data URL that Grok accepts
-async function fileToDataURL(file: File): Promise<string> {
-	const arrayBuffer = await file.arrayBuffer();
-	const base64 = Buffer.from(arrayBuffer).toString('base64');
-	const mimeType = file.type || 'application/pdf';
-	return `data:${mimeType};base64,${base64}`;
-}
 
