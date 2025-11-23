@@ -41,6 +41,8 @@ export async function POST(request: Request) {
 		const uploadForm = new FormData();
 		// "file" is the field name xAI expects (OpenAI compatible)
 		uploadForm.append('file', blob, (file as any).name ?? 'sides.pdf');
+		// Purpose must be "assistants" so the file can be used with file_search tools.
+		uploadForm.append('purpose', 'assistants');
 
 		const uploadResponse = await fetch('https://api.x.ai/v1/files', {
 			method: 'POST',
@@ -75,119 +77,93 @@ export async function POST(request: Request) {
 			);
 		}
 
-		// Step 2: Create a Grok chat session (required for document search)
-		const chatCreateRes = await fetch('https://api.x.ai/v1/chats', {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify({
-				model: 'grok-4-fast'
-			})
-		});
+		// Step 2: Call xAI Responses API with a file_search attachment on the uploaded PDF.
+		const prompt = `You are an expert casting assistant. Extract every spoken line of dialogue from the attached audition sides PDF.
 
-		if (!chatCreateRes.ok) {
-			const err = await chatCreateRes.text().catch(() => 'Unknown error');
-			console.error('Grok chat create API error:', err);
-			return NextResponse.json({ error: 'Failed to create Grok chat session' }, { status: 502 });
-		}
+Rules:
+- Character names are in ALL CAPS before their lines (e.g. MAX, ZOE, MICHELLE)
+- The actor's character is "${characterName.toUpperCase()}". Any line under ${characterName.toUpperCase()}, ${
+			characterName.toUpperCase()
+		} (CONT’D), etc. belongs to them.
+- Mark their lines as "myself"
+- All other spoken lines are "reader"
+- Ignore scene headings, page numbers, and pure stage directions, but do NOT ignore any actual spoken dialogue.
 
-		const chatJson: any = await chatCreateRes.json();
-		console.log('Grok chat create response for import-pdf-cues:', JSON.stringify(chatJson, null, 2));
-		const chat_id = chatJson?.id;
-
-		if (!chat_id || typeof chat_id !== 'string') {
-			console.error(
-				'Unexpected Grok chat create response (missing id):',
-				JSON.stringify(chatJson, null, 2)
-			);
-			return NextResponse.json(
-				{ error: 'Grok chat create did not return a valid id.' },
-				{ status: 502 }
-			);
-		}
-
-		// Step 3: Append the user message with file reference to the chat
-		const messagePayload = {
-			role: 'user',
-			content: [
-				{
-					// File MUST be first to activate document search.
-					type: 'input_file',
-					input_file_id: file_id
-				},
-				{
-					type: 'text',
-					text: `You are an expert casting assistant. Extract every spoken line from this audition sides PDF.
-
-Character: "${characterName.toUpperCase()}"
-
-- Their lines → "myself"
-- Everyone else → "reader"
-
-Return ONLY this JSON (no backticks, no extra text):
+Return ONLY valid JSON in this exact shape (no backticks, no extra keys, no comments):
 
 {
   "lines": [
-    ["myself" | "reader", "exact line here"]
+    ["myself" | "reader", "Exact line of dialogue here"]
   ]
-}`
+}`;
+
+		const responsesPayload = {
+			model: 'grok-4-fast',
+			input: [
+				{
+					role: 'user',
+					content: prompt,
+					attachments: [
+						{
+							file_id,
+							tools: [{ type: 'file_search' as const }]
+						}
+					]
 				}
 			]
 		};
 
 		console.log(
-			'Appending Grok message for import-pdf-cues with payload:',
+			'Calling xAI /responses for import-pdf-cues with payload:',
 			JSON.stringify(
 				{
-					...messagePayload,
-					// Redact prompt text for logs
-					content: messagePayload.content.map((c) =>
-						c.type === 'text' ? { ...c, text: '[omitted prompt text in logs]' } : c
-					)
+					...responsesPayload,
+					// Redact prompt text for logs to reduce noise
+					input: responsesPayload.input.map((item) => ({
+						...item,
+						content: '[omitted prompt text in logs]'
+					}))
 				},
 				null,
 				2
 			)
 		);
 
-		const appendRes = await fetch(`https://api.x.ai/v1/chats/${chat_id}/messages`, {
+		const responsesRes = await fetch('https://api.x.ai/v1/responses', {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
 				'Content-Type': 'application/json'
 			},
-			body: JSON.stringify(messagePayload)
+			body: JSON.stringify(responsesPayload)
 		});
 
-		if (!appendRes.ok) {
-			const err = await appendRes.text().catch(() => 'Unknown error');
-			console.error('Grok message append API error:', err);
-			return NextResponse.json({ error: 'Failed to append message to Grok chat' }, { status: 502 });
+		if (!responsesRes.ok) {
+			const err = await responsesRes.text().catch(() => 'Unknown error');
+			console.error('xAI /responses API error for import-pdf-cues:', err);
+			return NextResponse.json(
+				{ error: 'Failed to process script with Grok /responses.' },
+				{ status: 502 }
+			);
 		}
 
-		// Step 4: Ask Grok to sample a response for this chat session
-		const sampleRes = await fetch(`https://api.x.ai/v1/chats/${chat_id}/sample`, {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify({})
-		});
+		const data: any = await responsesRes.json();
+		console.log('Raw xAI /responses JSON for import-pdf-cues:', JSON.stringify(data, null, 2));
 
-		if (!sampleRes.ok) {
-			const err = await sampleRes.text().catch(() => 'Unknown error');
-			console.error('Grok chat sample API error:', err);
-			return NextResponse.json({ error: 'Grok processing failed' }, { status: 502 });
-		}
-
-		const data: any = await sampleRes.json();
-		console.log('Raw Grok JSON for import-pdf-cues (sample):', JSON.stringify(data, null, 2));
-
-		// The chat sample API may return either { content: string } or { message: { content: string } }
-		const content = data?.content ?? data?.message?.content;
+		// The Responses API may expose output_text directly, or an output array with text content.
+		const content =
+			typeof data.output_text === 'string'
+				? data.output_text
+				: Array.isArray(data.output)
+					? (() => {
+							const first = data.output[0];
+							// OpenAI/xAI-style: find a message or text content entry.
+							if (first?.content && typeof first.content[0]?.text === 'string') {
+								return first.content[0].text;
+							}
+							return null;
+						})()
+					: null;
 		let raw = '';
 
 		if (typeof content === 'string') {
