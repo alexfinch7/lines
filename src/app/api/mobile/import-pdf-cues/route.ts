@@ -76,7 +76,7 @@ export async function POST(request: Request) {
 		}
 
 		// Step 2: Create a Grok chat session (required for document search)
-		const chatCreateRes = await fetch('https://api.x.ai/v1/chat', {
+		const chatCreateRes = await fetch('https://api.x.ai/v1/chats', {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
