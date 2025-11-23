@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import type { ReaderAudioJob } from '../readerAudioJobs';
 import { readerAudioJobs } from '../readerAudioJobs';
-import { supabaseAdmin } from '@/lib/supabaseServer';
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 export const runtime = 'nodejs';
@@ -39,7 +38,7 @@ async function processJob(jobId: string, body: StartRequestBody) {
 		});
 
 		const totalLines = body.lines.length;
-		let uploadedCount = 0;
+		let generatedCount = 0;
 
 		// Process TTS in batches of 6 to limit concurrent requests against ElevenLabs.
 		const concurrency = 6;
@@ -94,44 +93,13 @@ async function processJob(jobId: string, body: StartRequestBody) {
 						} else {
 							jobForTemp.audio.push([lineId, base64DataUrl]);
 						}
+
+						generatedCount += 1;
+						if (generatedCount === totalLines && jobForTemp.status !== 'error') {
+							jobForTemp.status = 'complete';
+						}
+
 						readerAudioJobs.set(jobId, jobForTemp);
-					}
-
-					// Phase 2: upload in the background of this worker; playback is already possible.
-					const path = `tts/${body.sceneId}/${lineId}.mp3`;
-					const { error: uploadError } = await supabaseAdmin.storage
-						.from('reader-recordings')
-						.upload(path, audioBuffer, {
-							contentType: 'audio/mpeg',
-							upsert: true
-						});
-
-					const jobForUpload = readerAudioJobs.get(jobId);
-					if (!jobForUpload) {
-						return;
-					}
-
-					if (!uploadError) {
-						const {
-							data: { publicUrl }
-						} = supabaseAdmin.storage.from('reader-recordings').getPublicUrl(path);
-
-						const existingIndex = jobForUpload.audio.findIndex(([id]) => id === lineId);
-						if (existingIndex >= 0) {
-							jobForUpload.audio[existingIndex] = [lineId, publicUrl];
-						} else {
-							jobForUpload.audio.push([lineId, publicUrl]);
-						}
-
-						uploadedCount += 1;
-						if (uploadedCount === totalLines && jobForUpload.status !== 'error') {
-							jobForUpload.status = 'complete';
-						}
-						readerAudioJobs.set(jobId, jobForUpload);
-					} else {
-						console.error('Supabase storage upload error for line', lineId, uploadError);
-						// Do not fail the whole job; client can still use temp audio.
-						readerAudioJobs.set(jobId, jobForUpload);
 					}
 				})
 			);
