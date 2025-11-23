@@ -14,10 +14,10 @@ type StartRequestBody = {
 };
 
 async function processJob(jobId: string, body: StartRequestBody) {
-	const job = readerAudioJobs.get(jobId);
-	if (!job) return;
-
 	try {
+		const job = readerAudioJobs.get(jobId);
+		if (!job) return;
+
 		const elevenKey = process.env.ELEVENLABS_API_KEY;
 		if (!elevenKey) {
 			throw new Error('Missing ELEVENLABS_API_KEY configuration');
@@ -38,13 +38,7 @@ async function processJob(jobId: string, body: StartRequestBody) {
 			apiKey: elevenKey
 		});
 
-		job.status = 'processing';
-		job.audio = [];
-		job.error = null;
-		readerAudioJobs.set(jobId, job);
-
 		const totalLines = body.lines.length;
-		let generatedCount = 0;
 		let uploadedCount = 0;
 
 		// Process TTS in batches of 6 to limit concurrent requests against ElevenLabs.
@@ -80,29 +74,30 @@ async function processJob(jobId: string, body: StartRequestBody) {
 						}
 					} catch (err) {
 						console.error('ElevenLabs SDK TTS error for line', lineId, err);
-						// Mark job as error but keep any audio we may already have.
-						job.status = 'error';
-						job.error = 'Failed to generate reader audio from ElevenLabs.';
-						readerAudioJobs.set(jobId, job);
+
+						const currentJob = readerAudioJobs.get(jobId);
+						if (currentJob) {
+							currentJob.status = 'error';
+							currentJob.error = 'Failed to generate reader audio from ElevenLabs.';
+							readerAudioJobs.set(jobId, currentJob);
+						}
 						return;
 					}
 
-					// Expose base64 audio immediately for client playback.
-					const base64 = audioBuffer.toString('base64');
-					const existing = job.audio.find((a) => a.lineId === lineId);
-					if (existing) {
-						existing.tempAudioBase64 = base64;
-					} else {
-						job.audio.push({ lineId, tempAudioBase64: base64 });
+					// Phase 1: expose base64 audio immediately for client playback.
+					const base64DataUrl = `data:audio/mpeg;base64,${audioBuffer.toString('base64')}`;
+					const jobForTemp = readerAudioJobs.get(jobId);
+					if (jobForTemp) {
+						const existingIndex = jobForTemp.audio.findIndex(([id]) => id === lineId);
+						if (existingIndex >= 0) {
+							jobForTemp.audio[existingIndex] = [lineId, base64DataUrl];
+						} else {
+							jobForTemp.audio.push([lineId, base64DataUrl]);
+						}
+						readerAudioJobs.set(jobId, jobForTemp);
 					}
 
-					generatedCount += 1;
-					if (generatedCount === totalLines && job.status !== 'error') {
-						job.status = 'ready';
-					}
-					readerAudioJobs.set(jobId, job);
-
-					// Upload in the background of this worker; playback is already possible.
+					// Phase 2: upload in the background of this worker; playback is already possible.
 					const path = `tts/${body.sceneId}/${lineId}.mp3`;
 					const { error: uploadError } = await supabaseAdmin.storage
 						.from('reader-recordings')
@@ -111,34 +106,44 @@ async function processJob(jobId: string, body: StartRequestBody) {
 							upsert: true
 						});
 
+					const jobForUpload = readerAudioJobs.get(jobId);
+					if (!jobForUpload) {
+						return;
+					}
+
 					if (!uploadError) {
 						const {
 							data: { publicUrl }
 						} = supabaseAdmin.storage.from('reader-recordings').getPublicUrl(path);
 
-						const updated = job.audio.find((a) => a.lineId === lineId);
-						if (updated) {
-							updated.publicUrl = publicUrl;
+						const existingIndex = jobForUpload.audio.findIndex(([id]) => id === lineId);
+						if (existingIndex >= 0) {
+							jobForUpload.audio[existingIndex] = [lineId, publicUrl];
+						} else {
+							jobForUpload.audio.push([lineId, publicUrl]);
 						}
 
 						uploadedCount += 1;
-						if (uploadedCount === totalLines && job.status !== 'error') {
-							job.status = 'complete';
+						if (uploadedCount === totalLines && jobForUpload.status !== 'error') {
+							jobForUpload.status = 'complete';
 						}
-						readerAudioJobs.set(jobId, job);
+						readerAudioJobs.set(jobId, jobForUpload);
 					} else {
 						console.error('Supabase storage upload error for line', lineId, uploadError);
 						// Do not fail the whole job; client can still use temp audio.
+						readerAudioJobs.set(jobId, jobForUpload);
 					}
 				})
 			);
 		}
 	} catch (e) {
 		console.error('Error processing reader audio job', e);
-		job.status = 'error';
-		job.audio = [];
-		job.error = 'Failed to generate reader audio.';
-		readerAudioJobs.set(jobId, job);
+		const job = readerAudioJobs.get(jobId);
+		if (job) {
+			job.status = 'error';
+			job.error = 'Failed to generate reader audio.';
+			readerAudioJobs.set(jobId, job);
+		}
 	}
 }
 

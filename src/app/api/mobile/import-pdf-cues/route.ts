@@ -51,10 +51,6 @@ export async function POST(request: Request) {
 		const buffer = Buffer.from(arrayBuffer);
 		const parsed = await pdfParse(buffer);
 		const scriptText = parsed.text ?? '';
-		const scriptWordCount = scriptText
-			.split(/\s+/)
-			.map((w) => w.trim())
-			.filter((w) => w.length > 0).length;
 
 		// 2) Build command for OpenAI Responses API
 		const command = `
@@ -90,8 +86,8 @@ Now read the script text above and return ONLY the JSON object in the specified 
 
 		let input: string | any[]; // string for text-only, array for multimodal (PDF file)
 
-		if (scriptWordCount >= 65) {
-			// Normal path: we have a reasonably-sized extracted text payload
+		if (scriptText.trim()) {
+			// Normal path: we have extracted text locally
 			input = `${title}\n\n${scriptText}\n\n${command}`;
 		} else {
 			// Fallback path: let OpenAI read the raw PDF directly via file upload
