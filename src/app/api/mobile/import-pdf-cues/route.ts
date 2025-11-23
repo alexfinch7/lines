@@ -75,23 +75,51 @@ export async function POST(request: Request) {
 			);
 		}
 
-		// Step 2: Send the uploaded file + prompt using an agentic-capable model
-		const grokPayload = {
-			// grok-4-fast supports agentic document search with file attachments.
-			model: 'grok-4-fast',
-			temperature: 0,
-			messages: [
+		// Step 2: Create a Grok chat session (required for document search)
+		const chatCreateRes = await fetch('https://api.x.ai/v1/chat', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				model: 'grok-4-fast'
+			})
+		});
+
+		if (!chatCreateRes.ok) {
+			const err = await chatCreateRes.text().catch(() => 'Unknown error');
+			console.error('Grok chat create API error:', err);
+			return NextResponse.json({ error: 'Failed to create Grok chat session' }, { status: 502 });
+		}
+
+		const chatJson: any = await chatCreateRes.json();
+		console.log('Grok chat create response for import-pdf-cues:', JSON.stringify(chatJson, null, 2));
+		const chat_id = chatJson?.id;
+
+		if (!chat_id || typeof chat_id !== 'string') {
+			console.error(
+				'Unexpected Grok chat create response (missing id):',
+				JSON.stringify(chatJson, null, 2)
+			);
+			return NextResponse.json(
+				{ error: 'Grok chat create did not return a valid id.' },
+				{ status: 502 }
+			);
+		}
+
+		// Step 3: Append the user message with file reference to the chat
+		const messagePayload = {
+			role: 'user',
+			content: [
 				{
-					role: 'user',
-					content: [
-						{
-							// File MUST be first to activate document search.
-							type: 'input_file',
-							input_file_id: file_id
-						},
-						{
-							type: 'text',
-							text: `You are an expert casting assistant. Extract every spoken line from this audition sides PDF.
+					// File MUST be first to activate document search.
+					type: 'input_file',
+					input_file_id: file_id
+				},
+				{
+					type: 'text',
+					text: `You are an expert casting assistant. Extract every spoken line from this audition sides PDF.
 
 Character: "${characterName.toUpperCase()}"
 
@@ -105,51 +133,61 @@ Return ONLY this JSON (no backticks, no extra text):
     ["myself" | "reader", "exact line here"]
   ]
 }`
-						}
-					]
 				}
 			]
 		};
 
 		console.log(
-			'Calling Grok for import-pdf-cues with payload:',
+			'Appending Grok message for import-pdf-cues with payload:',
 			JSON.stringify(
 				{
-					...grokPayload,
-					// Redact potentially large content text in logs to avoid noise
-					messages: grokPayload.messages.map((m) => ({
-						...m,
-						content: m.content.map((c) =>
-							c.type === 'text'
-								? { ...c, text: '[omitted prompt text in logs]' }
-								: c
-						)
-					}))
+					...messagePayload,
+					// Redact prompt text for logs
+					content: messagePayload.content.map((c) =>
+						c.type === 'text' ? { ...c, text: '[omitted prompt text in logs]' } : c
+					)
 				},
 				null,
 				2
 			)
 		);
 
-		const grokResponse = await fetch('https://api.x.ai/v1/chat/completions', {
+		const appendRes = await fetch(`https://api.x.ai/v1/chat/${chat_id}/messages`, {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
 				'Content-Type': 'application/json'
 			},
-			body: JSON.stringify(grokPayload)
+			body: JSON.stringify(messagePayload)
 		});
 
-		if (!grokResponse.ok) {
-			const err = await grokResponse.text().catch(() => 'Unknown error');
-			console.error('Grok API error:', err);
+		if (!appendRes.ok) {
+			const err = await appendRes.text().catch(() => 'Unknown error');
+			console.error('Grok message append API error:', err);
+			return NextResponse.json({ error: 'Failed to append message to Grok chat' }, { status: 502 });
+		}
+
+		// Step 4: Ask Grok to sample a response for this chat session
+		const sampleRes = await fetch(`https://api.x.ai/v1/chat/${chat_id}/sample`, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({})
+		});
+
+		if (!sampleRes.ok) {
+			const err = await sampleRes.text().catch(() => 'Unknown error');
+			console.error('Grok chat sample API error:', err);
 			return NextResponse.json({ error: 'Grok processing failed' }, { status: 502 });
 		}
 
-		const data: any = await grokResponse.json();
-		console.log('Raw Grok JSON for import-pdf-cues:', JSON.stringify(data, null, 2));
+		const data: any = await sampleRes.json();
+		console.log('Raw Grok JSON for import-pdf-cues (sample):', JSON.stringify(data, null, 2));
 
-		const content = data?.choices?.[0]?.message?.content;
+		// The chat sample API may return either { content: string } or { message: { content: string } }
+		const content = data?.content ?? data?.message?.content;
 		let raw = '';
 
 		if (typeof content === 'string') {
