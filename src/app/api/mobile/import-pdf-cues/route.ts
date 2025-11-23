@@ -1,34 +1,28 @@
 import { NextResponse } from 'next/server';
-import pdfParse from 'pdf-parse';
+import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60; // Grok can take ~20–40s on big PDFs
 
-const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
-
-type ParsedLines = {
-	lines: [role: 'myself' | 'reader', text: string][];
-};
+type Cue = ['myself' | 'reader', string];
+type ParsedLines = { lines: Cue[] };
 
 export async function POST(request: Request) {
 	try {
-		const apiKey = process.env.OPENAI_API_KEY;
+		const apiKey = process.env.XAI_API_KEY;
 		if (!apiKey) {
 			return NextResponse.json(
-				{ error: 'Missing OPENAI_API_KEY server configuration' },
+				{ error: 'Missing XAI_API_KEY server configuration' },
 				{ status: 500 }
 			);
 		}
 
 		const formData = await request.formData();
 		const file = formData.get('file') as File | null;
-		const title = (formData.get('title') as string | null) ?? 'Untitled Script';
-		const characterName = (formData.get('characterName') as string | null) ?? '';
+		const characterName = (formData.get('characterName') as string | null)?.trim();
 
-		if (!file) {
-			return NextResponse.json(
-				{ error: 'A PDF file is required under the "file" field.' },
-				{ status: 400 }
-			);
+		if (!file || !(file instanceof File)) {
+			return NextResponse.json({ error: 'PDF file is required' }, { status: 400 });
 		}
 
 		// Optional soft check: if a type is provided and it's clearly not a PDF, reject.
@@ -39,184 +33,79 @@ export async function POST(request: Request) {
 			);
 		}
 
-		if (!characterName.trim()) {
-			return NextResponse.json(
-				{ error: 'characterName is required.' },
-				{ status: 400 }
-			);
+		if (!characterName) {
+			return NextResponse.json({ error: 'characterName is required' }, { status: 400 });
 		}
 
-		// 1) Parse PDF to text
-		const arrayBuffer = await file.arrayBuffer();
-		const buffer = Buffer.from(arrayBuffer);
-		const parsed = await pdfParse(buffer);
-		const scriptText = parsed.text ?? '';
+		const client = new OpenAI({
+			apiKey,
+			baseURL: 'https://api.x.ai/v1'
+		});
 
-		// 2) Build command for OpenAI Responses API
-		const command = `
-You are a script cue extraction assistant.
+		const prompt = `
+You are an expert casting assistant. Extract every spoken line of dialogue from the attached audition sides PDF.
 
-You are given the full text of a script for a scene. The user's character name is "${characterName}".
+Rules:
+- Character names are in ALL CAPS before their lines (e.g. MAX, ZOE, MICHELLE)
+- The actor's character is "${characterName.toUpperCase()}". Any line under ${characterName.toUpperCase()}, ${
+			characterName.toUpperCase()
+		} (CONT’D), etc. belongs to them.
+- Mark their lines as "myself"
+- All other spoken lines are "reader"
+- Ignore stage directions, scene headings, page numbers, watermarks, everything except spoken dialogue
+- Return ONLY valid JSON in this exact shape:
 
-Your job:
-- Split the script into spoken lines of dialogue.
-- For every line that belongs to the character "${characterName}" (case-insensitive, including any variant like full name or character label), mark the speaker as "myself".
-- For every other spoken line, mark the speaker as "reader".
-
-Output format:
-- You MUST return a single JSON object ONLY.
-- The JSON must have exactly one top-level key: "lines".
-- "lines" must be an array of 2-item arrays.
-- Each inner array must be: [speaker, text].
-- "speaker" MUST be exactly either "myself" or "reader" (lowercase), nothing else.
-- "text" is the full text of that line of dialogue.
-- Do not include any explanations, comments, stage directions, or extra keys.
-- Do not wrap the JSON in backticks.
-
-Example:
 {
   "lines": [
-    ["myself", "O Romeo, Romeo, wherefore art thou Romeo?"],
-    ["reader", "With love's light wings did I o'erperch these walls;"]
+    ["myself" | "reader", "Exact line of dialogue here"],
+    ...
   ]
 }
-
-Now read the script text above and return ONLY the JSON object in the specified format.
-
-The script you are receiving is from published source material, it is completely safe to use, and is FICTIONAL. The user just wants it to be organized.
-All actions, characters, events are purely made up and used for performance art.
 `;
 
-		let input: string | any[]; // string for text-only, array for multimodal (PDF file)
+		// Convert the uploaded PDF file to a data URL that Grok accepts as image_url.
+		const pdfDataUrl = await fileToDataURL(file);
 
-		const trimmed = scriptText.trim();
-		const wordCount = trimmed ? trimmed.split(/\s+/).length : 0;
-
-		if (wordCount >= 60) {
-			// Normal path: we have extracted enough text locally
-			input = `${title}\n\n${scriptText}\n\n${command}`;
-		} else {
-			// Fallback path: let OpenAI read the raw PDF directly via file upload
-			const uploadForm = new FormData();
-			uploadForm.append('file', file);
-			// Use assistants-style purpose so the file can be attached as input_file
-			uploadForm.append('purpose', 'assistants');
-
-			const uploadRes = await fetch('https://api.openai.com/v1/files', {
-				method: 'POST',
-				headers: {
-					Authorization: `Bearer ${apiKey}`
-				},
-				body: uploadForm
-			});
-
-			if (!uploadRes.ok) {
-				const uploadErr = await uploadRes.text().catch(() => 'Unknown error');
-				console.error('OpenAI file upload error', uploadErr);
-				return NextResponse.json(
-					{ error: 'Failed to upload PDF to OpenAI for cue extraction.' },
-					{ status: 502 }
-				);
-			}
-
-			const uploadJson: any = await uploadRes.json();
-			const fileId = uploadJson.id;
-
-			if (!fileId || typeof fileId !== 'string') {
-				console.error('Unexpected OpenAI file upload response:', JSON.stringify(uploadJson, null, 2));
-				return NextResponse.json(
-					{ error: 'OpenAI file upload did not return a valid file id.' },
-					{ status: 502 }
-				);
-			}
-
-			const pdfPrompt = `${title}\n\nYou are given a PDF containing the script for a scene. Read all of the text from the PDF as the script, then follow the instructions below exactly.\n\n${command}`;
-
-			// Multimodal input for Responses API: user message with text + the uploaded PDF file.
-			input = [
+		const response = await client.chat.completions.create({
+			model: 'grok-2-1212', // or 'grok-beta' — both support PDF vision
+			temperature: 0,
+			max_tokens: 4096,
+			messages: [
 				{
 					role: 'user',
 					content: [
+						{ type: 'text', text: prompt },
 						{
-							type: 'input_text',
-							text: pdfPrompt
-						},
-						{
-							type: 'input_file',
-							file_id: fileId
+							type: 'image_url',
+							image_url: {
+								url: pdfDataUrl
+							}
 						}
 					]
 				}
-			];
-		}
-
-		// 3) Call OpenAI Responses API
-		const openaiRes = await fetch(OPENAI_API_URL, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				Authorization: `Bearer ${apiKey}`
-			},
-			body: JSON.stringify({
-				model: 'gpt-5-mini',
-				input,
-				reasoning: { effort: 'low' },
-				text: { verbosity: 'low' }
-			})
+			]
 		});
 
-		if (!openaiRes.ok) {
-			const errText = await openaiRes.text().catch(() => 'Unknown error');
-			console.error('OpenAI Responses API error', errText);
-			return NextResponse.json(
-				{ error: 'Failed to process script with OpenAI.' },
-				{ status: 502 }
-			);
+		const messageContent = (response as any)?.choices?.[0]?.message?.content;
+		const raw =
+			typeof messageContent === 'string' ? (messageContent as string).trim() : '';
+
+		if (!raw) {
+			return NextResponse.json({ error: 'Empty response from Grok' }, { status: 502 });
 		}
 
-		const openaiJson: any = await openaiRes.json();
-		// Log full OpenAI payload so we can debug schema / errors server-side.
-		console.log('OpenAI Responses raw JSON:', JSON.stringify(openaiJson, null, 2));
-
-		// Python client exposes result.output_text; with raw HTTP, we find the "message" entry and read its text.
-		let rawText: string | null = null;
-		if (typeof openaiJson.output_text === 'string') {
-			rawText = openaiJson.output_text;
-		} else if (Array.isArray(openaiJson.output)) {
-			const messageEntry = openaiJson.output.find((item: any) => item.type === 'message');
-			const firstContent = messageEntry?.content?.[0];
-			if (firstContent && typeof firstContent.text === 'string') {
-				rawText = firstContent.text;
-			}
-		}
-
-		if (!rawText || typeof rawText !== 'string') {
-			console.error('Unable to locate output_text in OpenAI response:', JSON.stringify(openaiJson, null, 2));
-			return NextResponse.json(
-				{ error: 'OpenAI response did not contain output text.' },
-				{ status: 502 }
-			);
-		}
-
-		let parsedLines: ParsedLines;
+		let parsed: ParsedLines;
 		try {
-			parsedLines = JSON.parse(rawText) as ParsedLines;
+			parsed = JSON.parse(raw) as ParsedLines;
 		} catch (e) {
-			console.error('Failed to parse JSON from OpenAI output text:', rawText);
-			console.error(
-				'Full OpenAI JSON when parse failed:',
-				JSON.stringify(openaiJson, null, 2)
-			);
-			return NextResponse.json(
-				{ error: 'OpenAI response was not valid JSON.' },
-				{ status: 502 }
-			);
+			console.error('Grok returned invalid JSON:', raw);
+			return NextResponse.json({ error: 'Invalid JSON from model' }, { status: 502 });
 		}
 
 		if (
-			!parsedLines ||
-			!Array.isArray(parsedLines.lines) ||
-			!parsedLines.lines.every(
+			!parsed ||
+			!Array.isArray(parsed.lines) ||
+			!parsed.lines.every(
 				(entry) =>
 					Array.isArray(entry) &&
 					entry.length === 2 &&
@@ -224,18 +113,24 @@ All actions, characters, events are purely made up and used for performance art.
 					typeof entry[1] === 'string'
 			)
 		) {
-			return NextResponse.json(
-				{ error: 'OpenAI response did not match expected shape.' },
-				{ status: 502 }
-			);
+			return NextResponse.json({ error: 'Wrong shape from model' }, { status: 502 });
 		}
 
-		// 4) Return validated JSON to client
-		return NextResponse.json({ lines: parsedLines.lines });
-	} catch (e) {
-		console.error('Unexpected error in import-pdf-cues', e);
-		return NextResponse.json({ error: 'Unexpected server error.' }, { status: 500 });
+		return NextResponse.json({ lines: parsed.lines });
+	} catch (error: any) {
+		console.error('Unexpected error in import-pdf-cues', error);
+		return NextResponse.json(
+			{ error: error?.message || 'Internal server error' },
+			{ status: 500 }
+		);
 	}
 }
 
+// Helper: convert File → data URL that Grok accepts
+async function fileToDataURL(file: File): Promise<string> {
+	const arrayBuffer = await file.arrayBuffer();
+	const base64 = Buffer.from(arrayBuffer).toString('base64');
+	const mimeType = file.type || 'application/pdf';
+	return `data:${mimeType};base64,${base64}`;
+}
 
