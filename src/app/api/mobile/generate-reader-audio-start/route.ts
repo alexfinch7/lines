@@ -38,57 +38,57 @@ async function processJob(jobId: string, body: StartRequestBody) {
 			apiKey: elevenKey
 		});
 
-		const audioResults: ReaderAudioJob['audio'] = [];
+		const audioResults: ReaderAudioJob['audio'] = await Promise.all(
+			body.lines.map(async ([lineId, _role, text, preferredVoice]) => {
+				const voiceId =
+					preferredVoice === 'male_presenting' ? maleVoiceId : femaleVoiceId;
 
-		for (const [lineId, _role, text, preferredVoice] of body.lines) {
-			const voiceId =
-				preferredVoice === 'male_presenting' ? maleVoiceId : femaleVoiceId;
+				let audioBuffer: Buffer;
+				try {
+					const audioResult = await client.textToSpeech.convert(voiceId, {
+						text,
+						modelId: 'eleven_multilingual_v2',
+						voiceSettings: {
+							stability: 0.5,
+							similarityBoost: 0.75
+						}
+					});
 
-			let audioBuffer: Buffer;
-			try {
-				const audioResult = await client.textToSpeech.convert(voiceId, {
-					text,
-					modelId: 'eleven_multilingual_v2',
-					voiceSettings: {
-						stability: 0.5,
-						similarityBoost: 0.75
+					if (audioResult instanceof ReadableStream) {
+						// SDK returned a web ReadableStream – consume it fully into a Buffer
+						const arrayBuffer = await new Response(audioResult).arrayBuffer();
+						audioBuffer = Buffer.from(arrayBuffer);
+					} else if (Buffer.isBuffer(audioResult)) {
+						audioBuffer = audioResult;
+					} else {
+						// Assume Uint8Array or ArrayBuffer-like
+						audioBuffer = Buffer.from(audioResult as Uint8Array);
 					}
-				});
-
-				if (audioResult instanceof ReadableStream) {
-					// SDK returned a web ReadableStream – consume it fully into a Buffer
-					const arrayBuffer = await new Response(audioResult).arrayBuffer();
-					audioBuffer = Buffer.from(arrayBuffer);
-				} else if (Buffer.isBuffer(audioResult)) {
-					audioBuffer = audioResult;
-				} else {
-					// Assume Uint8Array or ArrayBuffer-like
-					audioBuffer = Buffer.from(audioResult as Uint8Array);
+				} catch (err) {
+					console.error('ElevenLabs SDK TTS error for line', lineId, err);
+					throw new Error('Failed to generate reader audio from ElevenLabs.');
 				}
-			} catch (err) {
-				console.error('ElevenLabs SDK TTS error for line', lineId, err);
-				throw new Error('Failed to generate reader audio from ElevenLabs.');
-			}
 
-			const path = `tts/${body.sceneId}/${lineId}.mp3`;
-			const { error: uploadError } = await supabaseAdmin.storage
-				.from('reader-recordings')
-				.upload(path, audioBuffer, {
-					contentType: 'audio/mpeg',
-					upsert: true
-				});
+				const path = `tts/${body.sceneId}/${lineId}.mp3`;
+				const { error: uploadError } = await supabaseAdmin.storage
+					.from('reader-recordings')
+					.upload(path, audioBuffer, {
+						contentType: 'audio/mpeg',
+						upsert: true
+					});
 
-			if (uploadError) {
-				console.error('Supabase storage upload error for line', lineId, uploadError);
-				throw new Error('Failed to store generated reader audio.');
-			}
+				if (uploadError) {
+					console.error('Supabase storage upload error for line', lineId, uploadError);
+					throw new Error('Failed to store generated reader audio.');
+				}
 
-			const {
-				data: { publicUrl }
-			} = supabaseAdmin.storage.from('reader-recordings').getPublicUrl(path);
+				const {
+					data: { publicUrl }
+				} = supabaseAdmin.storage.from('reader-recordings').getPublicUrl(path);
 
-			audioResults.push([lineId, publicUrl]);
-		}
+				return [lineId, publicUrl];
+			})
+		);
 
 		job.status = 'complete';
 		job.audio = audioResults;
