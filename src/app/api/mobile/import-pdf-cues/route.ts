@@ -136,8 +136,22 @@ Return ONLY this JSON (no backticks, no extra text):
 		}
 
 		const data: any = await grokResponse.json();
+		console.log('Raw Grok JSON for import-pdf-cues:', JSON.stringify(data, null, 2));
+
 		const content = data?.choices?.[0]?.message?.content;
-		const raw = typeof content === 'string' ? (content as string).trim() : '';
+		let raw = '';
+
+		if (typeof content === 'string') {
+			raw = content.trim();
+		} else if (Array.isArray(content)) {
+			// Some xAI responses may use an array of content parts
+			const textPart = content.find(
+				(part: any) => part && typeof part.text === 'string'
+			);
+			if (textPart) {
+				raw = (textPart.text as string).trim();
+			}
+		}
 
 		if (!raw) {
 			console.error('Empty or non-string content from Grok:', JSON.stringify(data, null, 2));
@@ -166,10 +180,20 @@ Return ONLY this JSON (no backticks, no extra text):
 					typeof entry[1] === 'string'
 			)
 		) {
+			console.error(
+				'Parsed lines from Grok had wrong shape:',
+				JSON.stringify(parsed, null, 2)
+			);
 			return NextResponse.json({ error: 'Wrong shape from model' }, { status: 502 });
 		}
 
-		return NextResponse.json({ lines: parsed.lines });
+		const responseBody = { lines: parsed.lines };
+		console.log(
+			'Sending import-pdf-cues response to client:',
+			JSON.stringify(responseBody, null, 2)
+		);
+
+		return NextResponse.json(responseBody);
 	} catch (error: any) {
 		console.error('Unexpected error in import-pdf-cues', error);
 		return NextResponse.json(
