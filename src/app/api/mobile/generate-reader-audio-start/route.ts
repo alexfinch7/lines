@@ -9,7 +9,7 @@ export const runtime = 'nodejs';
 const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech';
 const OPENAI_TTS_MODEL = 'gpt-4o-mini-tts';
 const TTS_INSTRUCTIONS =
-	'Keep everything CONVERSATIONAL. Do not let the text imply any emotion. The pace is slightly faster, but still conversational, think a conversation between two quickthinking people.';
+	'Keep everything CONVERSATIONAL. Do not let the text imply any emotion. The pace is conversational, think a conversation between two quickthinking people, not too slow.';
 
 type StartRequestBody = {
 	sceneTitle: string;
@@ -29,7 +29,7 @@ async function processJob(jobId: string, body: StartRequestBody) {
 
 		// OpenAI TTS voices
 		const maleVoiceId = 'onyx';
-		const femaleVoiceId = 'nova';
+		const femaleVoiceId = 'alloy';
 
 		const audioResults: ReaderAudioJob['audio'] = await Promise.all(
 			body.lines.map(async ([lineId, _role, text, preferredVoice]) => {
