@@ -73,7 +73,8 @@ export async function POST(request: Request) {
 				'Content-Type': 'application/json'
 			},
 			body: JSON.stringify({
-				model: 'grok-2-1212',
+				// grok-2 models do not support server-side tools; use grok-4 family instead.
+				model: 'grok-4',
 				temperature: 0,
 				messages: [
 					{
