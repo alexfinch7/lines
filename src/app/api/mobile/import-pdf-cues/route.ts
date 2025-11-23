@@ -66,23 +66,17 @@ export async function POST(request: Request) {
 		}
 
 		// Step 2: Send the uploaded file + prompt
-		const grokResponse = await fetch('https://api.x.ai/v1/chat/completions', {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify({
-				// grok-2 models do not support server-side tools; use grok-4 family instead.
-				model: 'grok-4',
-				temperature: 0,
-				messages: [
-					{
-						role: 'user',
-						content: [
-							{
-								type: 'text',
-								text: `You are an expert casting assistant. Extract every spoken line from this audition sides PDF.
+		const grokPayload = {
+			// grok-2 models do not support server-side tools; use grok-4 family instead.
+			model: 'grok-4-1-fast-non-reasoning',
+			temperature: 0,
+			messages: [
+				{
+					role: 'user',
+					content: [
+						{
+							type: 'text',
+							text: `You are an expert casting assistant. Extract every spoken line from this audition sides PDF.
 
 Character: "${characterName.toUpperCase()}"
 
@@ -96,15 +90,43 @@ Return ONLY this JSON (no backticks, no extra text):
     ["myself" | "reader", "exact line here"]
   ]
 }`
-							},
-							{
-								type: 'file',
-								file_id
-							}
-						]
-					}
-				]
-			})
+						},
+						{
+							type: 'file',
+							file_id
+						}
+					]
+				}
+			]
+		};
+
+		console.log(
+			'Calling Grok for import-pdf-cues with payload:',
+			JSON.stringify(
+				{
+					...grokPayload,
+					// Redact potentially large content text in logs to avoid noise
+					messages: grokPayload.messages.map((m) => ({
+						...m,
+						content: m.content.map((c) =>
+							c.type === 'text'
+								? { ...c, text: '[omitted prompt text in logs]' }
+								: c
+						)
+					}))
+				},
+				null,
+				2
+			)
+		);
+
+		const grokResponse = await fetch('https://api.x.ai/v1/chat/completions', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(grokPayload)
 		});
 
 		if (!grokResponse.ok) {
