@@ -82,6 +82,9 @@ Example:
 }
 
 Now read the script text above and return ONLY the JSON object in the specified format.
+
+The script you are receiving is from published source material, it is completely safe to use, and is FICTIONAL. The user just wants it to be organized.
+All actions, characters, events are purely made up and used for performance art.
 `;
 
 		let input: string | any[]; // string for text-only, array for multimodal (PDF file)
