@@ -152,7 +152,7 @@ Return ONLY this JSON (no backticks, no extra text):
 			)
 		);
 
-		const appendRes = await fetch(`https://api.x.ai/v1/chat/${chat_id}/messages`, {
+		const appendRes = await fetch(`https://api.x.ai/v1/chats/${chat_id}/messages`, {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
@@ -168,7 +168,7 @@ Return ONLY this JSON (no backticks, no extra text):
 		}
 
 		// Step 4: Ask Grok to sample a response for this chat session
-		const sampleRes = await fetch(`https://api.x.ai/v1/chat/${chat_id}/sample`, {
+		const sampleRes = await fetch(`https://api.x.ai/v1/chats/${chat_id}/sample`, {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
