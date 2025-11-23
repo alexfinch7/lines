@@ -32,17 +32,23 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Missing XAI_API_KEY' }, { status: 500 });
 		}
 
-		// Step 1: Upload the PDF to xAI
-		const uploadForm = new FormData();
-		uploadForm.append('purpose', 'assistants');
-		uploadForm.append('file', file);
+		// Step 1: Upload the PDF to xAI using the official JSON files API (base64-encoded data)
+		const fileArrayBuffer = await file.arrayBuffer();
+		const fileBase64 = Buffer.from(fileArrayBuffer).toString('base64');
+
+		const uploadPayload = {
+			name: (file as any).name ?? 'sides.pdf',
+			content_type: file.type || 'application/pdf',
+			data: fileBase64
+		};
 
 		const uploadResponse = await fetch('https://api.x.ai/v1/files', {
 			method: 'POST',
 			headers: {
-				Authorization: `Bearer ${apiKey}`
+				Authorization: `Bearer ${apiKey}`,
+				'Content-Type': 'application/json'
 			},
-			body: uploadForm
+			body: JSON.stringify(uploadPayload)
 		});
 
 		if (!uploadResponse.ok) {
@@ -52,7 +58,11 @@ export async function POST(request: Request) {
 		}
 
 		const uploadedJson: any = await uploadResponse.json();
-		const file_id = uploadedJson?.id;
+		console.log(
+			'xAI file upload response for import-pdf-cues:',
+			JSON.stringify(uploadedJson, null, 2)
+		);
+		const file_id = uploadedJson?.file_id ?? uploadedJson?.id;
 
 		if (!file_id || typeof file_id !== 'string') {
 			console.error(
