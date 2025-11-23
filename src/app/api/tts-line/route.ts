@@ -94,7 +94,6 @@ export async function POST(request: Request) {
 		const audioResult = await client.textToSpeech.convert(voiceId, {
 			text,
 			modelId: 'eleven_flash_v2_5',
-			outputFormat: 'mp3_22050_32',
 			voiceSettings: {
 				stability: 0.5,
 				similarityBoost: 0.75
