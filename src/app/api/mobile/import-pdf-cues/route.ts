@@ -86,8 +86,11 @@ Now read the script text above and return ONLY the JSON object in the specified 
 
 		let input: string | any[]; // string for text-only, array for multimodal (PDF file)
 
-		if (scriptText.trim()) {
-			// Normal path: we have extracted text locally
+		const trimmed = scriptText.trim();
+		const wordCount = trimmed ? trimmed.split(/\s+/).length : 0;
+
+		if (wordCount >= 60) {
+			// Normal path: we have extracted enough text locally
 			input = `${title}\n\n${scriptText}\n\n${command}`;
 		} else {
 			// Fallback path: let OpenAI read the raw PDF directly via file upload
