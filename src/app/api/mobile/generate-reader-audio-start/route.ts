@@ -3,9 +3,13 @@ import crypto from 'crypto';
 import type { ReaderAudioJob } from '../readerAudioJobs';
 import { readerAudioJobs } from '../readerAudioJobs';
 import { supabaseAdmin } from '@/lib/supabaseServer';
-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 export const runtime = 'nodejs';
+
+const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech';
+const OPENAI_TTS_MODEL = 'gpt-4o-mini-tts';
+const TTS_INSTRUCTIONS =
+	'Keep everything CONVERSATIONAL. Do not let the text imply any emotion. The pace is slightly faster, but still conversational, think a conversation between two quickthinking people.';
 
 type StartRequestBody = {
 	sceneTitle: string;
@@ -18,25 +22,14 @@ async function processJob(jobId: string, body: StartRequestBody) {
 	if (!job) return;
 
 	try {
-		const elevenKey = process.env.ELEVENLABS_API_KEY;
-		if (!elevenKey) {
-			throw new Error('Missing ELEVENLABS_API_KEY configuration');
+		const openaiKey = process.env.OPENAI_API_KEY;
+		if (!openaiKey) {
+			throw new Error('Missing OPENAI_API_KEY configuration for TTS');
 		}
 
-		const maleVoiceId =
-			process.env.ELEVENLABS_MALE_VOICE_ID ?? process.env.ELEVENLABS_DEFAULT_VOICE_ID;
-		const femaleVoiceId =
-			process.env.ELEVENLABS_FEMALE_VOICE_ID ?? process.env.ELEVENLABS_DEFAULT_VOICE_ID;
-
-		if (!maleVoiceId || !femaleVoiceId) {
-			throw new Error(
-				'Missing ELEVENLABS_MALE_VOICE_ID / ELEVENLABS_FEMALE_VOICE_ID (or ELEVENLABS_DEFAULT_VOICE_ID)'
-			);
-		}
-
-		const client = new ElevenLabsClient({
-			apiKey: elevenKey
-		});
+		// OpenAI TTS voices
+		const maleVoiceId = 'onyx';
+		const femaleVoiceId = 'nova';
 
 		const audioResults: ReaderAudioJob['audio'] = await Promise.all(
 			body.lines.map(async ([lineId, _role, text, preferredVoice]) => {
@@ -45,28 +38,33 @@ async function processJob(jobId: string, body: StartRequestBody) {
 
 				let audioBuffer: Buffer;
 				try {
-					const audioResult = await client.textToSpeech.convert(voiceId, {
-						text,
-						modelId: 'eleven_multilingual_v2',
-						voiceSettings: {
-							stability: 0.5,
-							similarityBoost: 0.75
-						}
+					const ttsRes = await fetch(OPENAI_TTS_URL, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							Authorization: `Bearer ${openaiKey}`
+						},
+						body: JSON.stringify({
+							model: OPENAI_TTS_MODEL,
+							input: text,
+							voice: voiceId,
+							instructions: TTS_INSTRUCTIONS,
+							response_format: 'mp3',
+							speed: 1.15
+						})
 					});
 
-					if (audioResult instanceof ReadableStream) {
-						// SDK returned a web ReadableStream – consume it fully into a Buffer
-						const arrayBuffer = await new Response(audioResult).arrayBuffer();
-						audioBuffer = Buffer.from(arrayBuffer);
-					} else if (Buffer.isBuffer(audioResult)) {
-						audioBuffer = audioResult;
-					} else {
-						// Assume Uint8Array or ArrayBuffer-like
-						audioBuffer = Buffer.from(audioResult as Uint8Array);
+					if (!ttsRes.ok) {
+						const errText = await ttsRes.text().catch(() => 'Unknown OpenAI TTS error');
+						console.error('OpenAI TTS HTTP error for line', lineId, errText);
+						throw new Error('Failed to generate reader audio from OpenAI TTS.');
 					}
+
+					const arrayBuffer = await ttsRes.arrayBuffer();
+					audioBuffer = Buffer.from(arrayBuffer);
 				} catch (err) {
-					console.error('ElevenLabs SDK TTS error for line', lineId, err);
-					throw new Error('Failed to generate reader audio from ElevenLabs.');
+					console.error('OpenAI TTS error for line', lineId, err);
+					throw new Error('Failed to generate reader audio from OpenAI TTS.');
 				}
 
 				const path = `tts/${body.sceneId}/${lineId}.mp3`;
