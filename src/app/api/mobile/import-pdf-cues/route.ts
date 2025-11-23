@@ -32,23 +32,23 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Missing XAI_API_KEY' }, { status: 500 });
 		}
 
-		// Step 1: Upload the PDF to xAI using the official JSON files API (base64-encoded data)
+		// Step 1: Upload the PDF to xAI using multipart/form-data (OpenAI-compatible Files API)
 		const fileArrayBuffer = await file.arrayBuffer();
-		const fileBase64 = Buffer.from(fileArrayBuffer).toString('base64');
+		const blob = new Blob([fileArrayBuffer], {
+			type: file.type || 'application/pdf'
+		});
 
-		const uploadPayload = {
-			name: (file as any).name ?? 'sides.pdf',
-			content_type: file.type || 'application/pdf',
-			data: fileBase64
-		};
+		const uploadForm = new FormData();
+		// "file" is the field name xAI expects (OpenAI compatible)
+		uploadForm.append('file', blob, (file as any).name ?? 'sides.pdf');
 
 		const uploadResponse = await fetch('https://api.x.ai/v1/files', {
 			method: 'POST',
 			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				'Content-Type': 'application/json'
+				Authorization: `Bearer ${apiKey}`
+				// Do not set Content-Type; fetch will add the multipart boundary.
 			},
-			body: JSON.stringify(uploadPayload)
+			body: uploadForm
 		});
 
 		if (!uploadResponse.ok) {
