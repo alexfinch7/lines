@@ -75,15 +75,20 @@ export async function POST(request: Request) {
 			);
 		}
 
-		// Step 2: Send the uploaded file + prompt
+		// Step 2: Send the uploaded file + prompt using an agentic-capable model
 		const grokPayload = {
-			// grok-2 models do not support server-side tools; use grok-4 family instead.
-			model: 'grok-4-1-fast-non-reasoning',
+			// grok-4-fast supports agentic document search with file attachments.
+			model: 'grok-4-fast',
 			temperature: 0,
 			messages: [
 				{
 					role: 'user',
 					content: [
+						{
+							// File MUST be first to activate document search.
+							type: 'input_file',
+							input_file_id: file_id
+						},
 						{
 							type: 'text',
 							text: `You are an expert casting assistant. Extract every spoken line from this audition sides PDF.
@@ -100,10 +105,6 @@ Return ONLY this JSON (no backticks, no extra text):
     ["myself" | "reader", "exact line here"]
   ]
 }`
-						},
-						{
-							type: 'file',
-							file_id
 						}
 					]
 				}
