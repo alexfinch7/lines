@@ -1,8 +1,21 @@
-export type ReaderAudioJobStatus = 'pending' | 'complete' | 'error';
+export type ReaderAudioJobStatus = 'pending' | 'processing' | 'ready' | 'complete' | 'error';
+
+export type JobLineAudio = {
+	lineId: string;
+	/**
+	 * Ephemeral base64-encoded audio used for immediate playback.
+	 * This is available as soon as TTS completes for a line.
+	 */
+	tempAudioBase64?: string;
+	/**
+	 * Permanent public URL once the audio has been uploaded to storage.
+	 */
+	publicUrl?: string;
+};
 
 export type ReaderAudioJob = {
 	status: ReaderAudioJobStatus;
-	audio: [lineId: string, audioUrl: string][];
+	audio: JobLineAudio[];
 	error: string | null;
 };
 

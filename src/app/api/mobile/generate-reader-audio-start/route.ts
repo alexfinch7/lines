@@ -3,13 +3,9 @@ import crypto from 'crypto';
 import type { ReaderAudioJob } from '../readerAudioJobs';
 import { readerAudioJobs } from '../readerAudioJobs';
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 export const runtime = 'nodejs';
-
-const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech';
-const OPENAI_TTS_MODEL = 'gpt-4o-mini-tts';
-const TTS_INSTRUCTIONS =
-	'Keep everything CONVERSATIONAL. Do not let the text imply any emotion. The pace is conversational, think a conversation between two quickthinking people, not too slow.';
 
 type StartRequestBody = {
 	sceneTitle: string;
@@ -22,76 +18,121 @@ async function processJob(jobId: string, body: StartRequestBody) {
 	if (!job) return;
 
 	try {
-		const openaiKey = process.env.OPENAI_API_KEY;
-		if (!openaiKey) {
-			throw new Error('Missing OPENAI_API_KEY configuration for TTS');
+		const elevenKey = process.env.ELEVENLABS_API_KEY;
+		if (!elevenKey) {
+			throw new Error('Missing ELEVENLABS_API_KEY configuration');
 		}
 
-		// OpenAI TTS voices
-		const maleVoiceId = 'onyx';
-		const femaleVoiceId = 'alloy';
+		const maleVoiceId =
+			process.env.ELEVENLABS_MALE_VOICE_ID ?? process.env.ELEVENLABS_DEFAULT_VOICE_ID;
+		const femaleVoiceId =
+			process.env.ELEVENLABS_FEMALE_VOICE_ID ?? process.env.ELEVENLABS_DEFAULT_VOICE_ID;
 
-		const audioResults: ReaderAudioJob['audio'] = await Promise.all(
-			body.lines.map(async ([lineId, _role, text, preferredVoice]) => {
-				const voiceId =
-					preferredVoice === 'male_presenting' ? maleVoiceId : femaleVoiceId;
+		if (!maleVoiceId || !femaleVoiceId) {
+			throw new Error(
+				'Missing ELEVENLABS_MALE_VOICE_ID / ELEVENLABS_FEMALE_VOICE_ID (or ELEVENLABS_DEFAULT_VOICE_ID)'
+			);
+		}
 
-				let audioBuffer: Buffer;
-				try {
-					const ttsRes = await fetch(OPENAI_TTS_URL, {
-						method: 'POST',
-						headers: {
-							'Content-Type': 'application/json',
-							Authorization: `Bearer ${openaiKey}`
-						},
-						body: JSON.stringify({
-							model: OPENAI_TTS_MODEL,
-							input: text,
-							voice: voiceId,
-							instructions: TTS_INSTRUCTIONS,
-							response_format: 'mp3',
-							speed: 1.15
-						})
-					});
+		const client = new ElevenLabsClient({
+			apiKey: elevenKey
+		});
 
-					if (!ttsRes.ok) {
-						const errText = await ttsRes.text().catch(() => 'Unknown OpenAI TTS error');
-						console.error('OpenAI TTS HTTP error for line', lineId, errText);
-						throw new Error('Failed to generate reader audio from OpenAI TTS.');
-					}
-
-					const arrayBuffer = await ttsRes.arrayBuffer();
-					audioBuffer = Buffer.from(arrayBuffer);
-				} catch (err) {
-					console.error('OpenAI TTS error for line', lineId, err);
-					throw new Error('Failed to generate reader audio from OpenAI TTS.');
-				}
-
-				const path = `tts/${body.sceneId}/${lineId}.mp3`;
-				const { error: uploadError } = await supabaseAdmin.storage
-					.from('reader-recordings')
-					.upload(path, audioBuffer, {
-						contentType: 'audio/mpeg',
-						upsert: true
-					});
-
-				if (uploadError) {
-					console.error('Supabase storage upload error for line', lineId, uploadError);
-					throw new Error('Failed to store generated reader audio.');
-				}
-
-				const {
-					data: { publicUrl }
-				} = supabaseAdmin.storage.from('reader-recordings').getPublicUrl(path);
-
-				return [lineId, publicUrl];
-			})
-		);
-
-		job.status = 'complete';
-		job.audio = audioResults;
+		job.status = 'processing';
+		job.audio = [];
 		job.error = null;
 		readerAudioJobs.set(jobId, job);
+
+		const totalLines = body.lines.length;
+		let generatedCount = 0;
+		let uploadedCount = 0;
+
+		// Process TTS in batches of 6 to limit concurrent requests against ElevenLabs.
+		const concurrency = 6;
+		for (let i = 0; i < body.lines.length; i += concurrency) {
+			const batch = body.lines.slice(i, i + concurrency);
+
+			await Promise.all(
+				batch.map(async ([lineId, _role, text, preferredVoice]) => {
+					const voiceId =
+						preferredVoice === 'male_presenting' ? maleVoiceId : femaleVoiceId;
+
+					let audioBuffer: Buffer;
+					try {
+						const audioResult = await client.textToSpeech.convert(voiceId, {
+							text,
+							modelId: 'eleven_flash_v2_5',
+							voiceSettings: {
+								stability: 0.5,
+								similarityBoost: 0.75
+							}
+						});
+
+						if (audioResult instanceof ReadableStream) {
+							// SDK returned a web ReadableStream – consume it fully into a Buffer
+							const arrayBuffer = await new Response(audioResult).arrayBuffer();
+							audioBuffer = Buffer.from(arrayBuffer);
+						} else if (Buffer.isBuffer(audioResult)) {
+							audioBuffer = audioResult;
+						} else {
+							// Assume Uint8Array or ArrayBuffer-like
+							audioBuffer = Buffer.from(audioResult as Uint8Array);
+						}
+					} catch (err) {
+						console.error('ElevenLabs SDK TTS error for line', lineId, err);
+						// Mark job as error but keep any audio we may already have.
+						job.status = 'error';
+						job.error = 'Failed to generate reader audio from ElevenLabs.';
+						readerAudioJobs.set(jobId, job);
+						return;
+					}
+
+					// Expose base64 audio immediately for client playback.
+					const base64 = audioBuffer.toString('base64');
+					const existing = job.audio.find((a) => a.lineId === lineId);
+					if (existing) {
+						existing.tempAudioBase64 = base64;
+					} else {
+						job.audio.push({ lineId, tempAudioBase64: base64 });
+					}
+
+					generatedCount += 1;
+					if (generatedCount === totalLines && job.status !== 'error') {
+						job.status = 'ready';
+					}
+					readerAudioJobs.set(jobId, job);
+
+					// Upload in the background of this worker; playback is already possible.
+					const path = `tts/${body.sceneId}/${lineId}.mp3`;
+					const { error: uploadError } = await supabaseAdmin.storage
+						.from('reader-recordings')
+						.upload(path, audioBuffer, {
+							contentType: 'audio/mpeg',
+							upsert: true
+						});
+
+					if (!uploadError) {
+						const {
+							data: { publicUrl }
+						} = supabaseAdmin.storage.from('reader-recordings').getPublicUrl(path);
+
+						const updated = job.audio.find((a) => a.lineId === lineId);
+						if (updated) {
+							updated.publicUrl = publicUrl;
+						}
+
+						uploadedCount += 1;
+						if (uploadedCount === totalLines && job.status !== 'error') {
+							job.status = 'complete';
+						}
+						readerAudioJobs.set(jobId, job);
+					} else {
+						console.error('Supabase storage upload error for line', lineId, uploadError);
+						// Do not fail the whole job; client can still use temp audio.
+					}
+				})
+			);
+		}
 	} catch (e) {
 		console.error('Error processing reader audio job', e);
 		job.status = 'error';
