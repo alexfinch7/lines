@@ -19,7 +19,8 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 				`- Ignore scene headings, role labels, descriptions, and instructions.\n` +
 				`- Character names appear in ALL CAPS and label who is speaking.\n` +
 				`- For each turn of dialogue, output one object: { "speaker": CHARACTER_NAME, "text": spoken words }.\n` +
-				`- "speaker" must be the character name in ALL CAPS; "text" must be only what is spoken (no names, no headings).`,
+				`- "speaker" must be the character name in ALL CAPS; "text" must be only what is spoken (no names, no headings).\n` +
+				`- "Continued" lines should have the same speaker as the previous line.`,
 			schemaDefinition: {
 				type: 'object',
 				properties: {
