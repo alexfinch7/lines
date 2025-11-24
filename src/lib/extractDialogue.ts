@@ -10,21 +10,16 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 	const { pdfUrl, characterName } = options;
 
 	const documentAnnotationFormat = {
-		type: 'json_schema' as 'json_schema',
+		type: 'json_schema' as const,
 		jsonSchema: {
 			name: 'DialogueDoc',
 			description:
-				`Extract only spoken lines of dialogue from these audition sides.\n` +
-				`The actor's character is "${characterName.toUpperCase()}". Use these rules:\n` +
-				`1) Include ONLY words that are actually spoken aloud in the scene.\n` +
-				`   - Do NOT include scene headings (INT./EXT.), role labels, or section titles.\n` +
-				`   - Do NOT include action lines, stage directions, or description.\n` +
-				`   - Do NOT include instructions to actors (e.g. self‑tape guidelines).\n` +
-				`2) For every line spoken by "${characterName.toUpperCase()}" (including variants like NAME or NAME (CONT'D)), set role = "myself".\n` +
-				`3) For every line spoken by any other character or narrator, set role = "reader".\n` +
-				`4) Skip standalone character name labels if they are not spoken; only include the spoken text that follows.\n` +
-				`5) Each entry in lines should correspond to one turn of dialogue (one character speaking).\n` +
-				`6) Include EVERY line of dialogue from the script. Do not skip any lines.`,
+				`Extract ONLY spoken dialogue from a script PDF.\n` +
+				`- A spoken line is text said aloud by a character.\n` +
+				`- Ignore scene headings, role labels, descriptions, and instructions.\n` +
+				`- Character names appear in ALL CAPS and label who is speaking.\n` +
+				`- For each turn of dialogue, output one object: { "speaker": CHARACTER_NAME, "text": spoken words }.\n` +
+				`- "speaker" must be the character name in ALL CAPS; "text" must be only what is spoken (no names, no headings).`,
 			schemaDefinition: {
 				type: 'object',
 				properties: {
@@ -33,15 +28,10 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 						items: {
 							type: 'object',
 							properties: {
-								role: {
-									type: 'string',
-									enum: ['myself', 'reader']
-								},
-								text: {
-									type: 'string'
-								}
+								speaker: { type: 'string' },
+								text: { type: 'string' }
 							},
-							required: ['role', 'text']
+							required: ['speaker', 'text']
 						}
 					}
 				},

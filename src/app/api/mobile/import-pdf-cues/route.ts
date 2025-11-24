@@ -39,7 +39,17 @@ export async function POST(request: Request) {
 		// 2) Use Mistral OCR + document annotations to extract structured dialogue
 		const dialogueDoc = await extractDialogueFromPdf({ pdfUrl, characterName });
 
-		const lines: Cue[] = dialogueDoc.lines.map((line) => [line.role, line.text]);
+		const target = characterName.toUpperCase();
+
+		const lines: Cue[] = dialogueDoc.lines.map((line) => {
+			const normalizedSpeaker = line.speaker.trim().toUpperCase();
+
+			const role: 'myself' | 'reader' = normalizedSpeaker.includes(target)
+				? 'myself'
+				: 'reader';
+
+			return [role, line.text];
+		});
 
 		const responseBody: ParsedLines = { lines };
 
