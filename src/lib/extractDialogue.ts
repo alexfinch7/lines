@@ -10,6 +10,7 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 	const { pdfUrl, characterName } = options;
 
 	const documentAnnotationFormat = {
+		type: 'json_schema' as 'json_schema',
 		jsonSchema: {
 			name: 'DialogueDoc',
 			description: `Extract every spoken line of dialogue from these audition sides. The actor's character is "${characterName.toUpperCase()}". Any dialogue spoken by this character is "myself". All other speakers are "reader".`,
