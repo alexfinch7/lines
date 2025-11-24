@@ -1,27 +1,37 @@
+import { supabaseAdmin } from '@/lib/supabaseServer';
+
+const PDF_BUCKET = 'reader-recordings';
+const PDF_PREFIX = 'sides';
+
 /**
- * Upload the given PDF file to your storage (S3, GCS, Supabase Storage, etc.)
- * and return a temporary public URL that Mistral can fetch.
- *
- * This is intentionally left as an application-specific stub for you to
- * implement according to your infra. For example, you might use Supabase
- * Storage or an S3 bucket with a signed URL.
+ * Upload the given PDF file to Supabase Storage and return a public URL
+ * that Mistral can fetch.
  */
 export async function uploadToStorageAndGetUrl(file: File): Promise<string> {
-	// eslint-disable-next-line no-useless-catch
-	try {
-		// TODO: Implement your upload logic here.
-		// Example (pseudo-code):
-		// const arrayBuffer = await file.arrayBuffer();
-		// const buffer = Buffer.from(arrayBuffer);
-		// const url = await uploadBufferAndGetPublicUrl(buffer, file.name);
-		// return url;
+	const arrayBuffer = await file.arrayBuffer();
+	const buffer = Buffer.from(arrayBuffer);
 
-		throw new Error(
-			'uploadToStorageAndGetUrl is not implemented. Please wire this to your storage layer.'
-		);
-	} catch (err) {
-		throw err;
+	const ext = 'pdf';
+	const safeName = (file.name || 'sides.pdf').replace(/[^a-zA-Z0-9_.-]/g, '_');
+	const timestamp = Date.now();
+	const path = `${PDF_PREFIX}/${timestamp}-${safeName}.${ext}`;
+
+	const { error: uploadError } = await supabaseAdmin.storage.from(PDF_BUCKET).upload(path, buffer, {
+		contentType: file.type || 'application/pdf',
+		upsert: true
+	});
+
+	if (uploadError) {
+		console.error('Supabase storage upload error (sides PDF):', uploadError);
+		throw new Error(uploadError.message ?? 'Failed to upload PDF to Supabase Storage');
 	}
+
+	const {
+		data: { publicUrl }
+	} = supabaseAdmin.storage.from(PDF_BUCKET).getPublicUrl(path);
+
+	return publicUrl;
 }
+
 
 
