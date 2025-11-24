@@ -28,6 +28,7 @@ export async function POST(request: Request) {
 	try {
 		body = (await request.json()) as Partial<TtsLineRequestBody>;
 	} catch {
+		console.error('[tts-line] Invalid JSON body');
 		return NextResponse.json<TtsLineResponseBody>(
 			{ error: 'Invalid JSON body.' },
 			{ status: 400 }
@@ -38,7 +39,19 @@ export async function POST(request: Request) {
 	const text = typeof body.text === 'string' ? body.text.trim() : '';
 	const preferredVoice = body.preferredVoice;
 
+	console.log('[tts-line] Incoming request', {
+		lineId,
+		textLength: text.length,
+		textPreview: text.slice(0, 80),
+		preferredVoice
+	});
+
 	if (!lineId || !text || !preferredVoice) {
+		console.warn('[tts-line] Missing required fields', {
+			lineId,
+			textLength: text.length,
+			preferredVoice
+		});
 		return NextResponse.json<TtsLineResponseBody>(
 			{ error: 'lineId, text, and preferredVoice are required.' },
 			{ status: 400 }
@@ -46,6 +59,7 @@ export async function POST(request: Request) {
 	}
 
 	if (preferredVoice !== 'male_presenting' && preferredVoice !== 'female_presenting') {
+		console.warn('[tts-line] Invalid preferredVoice', { preferredVoice });
 		return NextResponse.json<TtsLineResponseBody>(
 			{ error: 'preferredVoice must be "male_presenting" or "female_presenting".' },
 			{ status: 400 }
@@ -53,6 +67,11 @@ export async function POST(request: Request) {
 	}
 
 	if (text.length > MAX_TEXT_LENGTH) {
+		console.warn('[tts-line] Text too long', {
+			lineId,
+			textLength: text.length,
+			max: MAX_TEXT_LENGTH
+		});
 		return NextResponse.json<TtsLineResponseBody>(
 			{ error: `Text exceeds maximum length of ${MAX_TEXT_LENGTH} characters.` },
 			{ status: 400 }
@@ -85,12 +104,21 @@ export async function POST(request: Request) {
 
 	const voiceId = preferredVoice === 'male_presenting' ? maleVoiceId : femaleVoiceId;
 
+	console.log('[tts-line] Starting ElevenLabs TTS', {
+		lineId,
+		textLength: text.length,
+		preferredVoice,
+		voiceId,
+		hasApiKey: Boolean(elevenKey)
+	});
+
 	const client = new ElevenLabsClient({
 		apiKey: elevenKey
 	});
 
 	let audioBuffer: Buffer;
 	try {
+		const startedAt = Date.now();
 		const audioResult = await client.textToSpeech.convert(voiceId, {
 			text,
 			modelId: 'eleven_flash_v2_5',
@@ -98,6 +126,18 @@ export async function POST(request: Request) {
 				stability: 0.5,
 				similarityBoost: 0.75
 			}
+		});
+
+		const elapsedMs = Date.now() - startedAt;
+		console.log('[tts-line] ElevenLabs TTS success', {
+			lineId,
+			elapsedMs,
+			resultType:
+				audioResult instanceof ReadableStream
+					? 'ReadableStream'
+					: Buffer.isBuffer(audioResult)
+					? 'Buffer'
+					: typeof audioResult
 		});
 
 		if (audioResult instanceof ReadableStream) {
@@ -109,7 +149,11 @@ export async function POST(request: Request) {
 			audioBuffer = Buffer.from(audioResult as Uint8Array);
 		}
 	} catch (err: unknown) {
-		console.error('ElevenLabs TTS error for line', lineId, err);
+		console.error('[tts-line] ElevenLabs TTS error', {
+			lineId,
+			error: err instanceof Error ? err.message : String(err),
+			raw: err
+		});
 
 		// Best-effort mapping of upstream errors to HTTP status codes
 		const status =
@@ -144,6 +188,11 @@ export async function POST(request: Request) {
 	}
 
 	const base64DataUrl = `data:audio/mpeg;base64,${audioBuffer.toString('base64')}`;
+	console.log('[tts-line] Responding to client', {
+		lineId,
+		audioBytes: audioBuffer.length,
+		dataUrlLength: base64DataUrl.length
+	});
 
 	return NextResponse.json<TtsLineResponseBody>({
 		lineId,

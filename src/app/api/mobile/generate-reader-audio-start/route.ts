@@ -154,6 +154,20 @@ export async function POST(request: Request) {
 	try {
 		const body = (await request.json()) as Partial<StartRequestBody>;
 
+		console.log('[reader-audio] Incoming start request', {
+			sceneTitle: body?.sceneTitle,
+			sceneId: body?.sceneId,
+			totalLines: Array.isArray(body?.lines) ? body!.lines.length : 0,
+			sampleLines: Array.isArray(body?.lines)
+				? body!.lines.slice(0, 3).map(([lineId, role, text, preferredVoice]) => ({
+						lineId,
+						role,
+						textLength: typeof text === 'string' ? text.length : 0,
+						preferredVoice
+				  }))
+				: []
+		});
+
 		if (!body || typeof body.sceneTitle !== 'string' || typeof body.sceneId !== 'string') {
 			return NextResponse.json(
 				{ error: 'sceneTitle and sceneId are required.' },
