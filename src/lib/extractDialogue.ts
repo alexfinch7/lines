@@ -13,7 +13,18 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 		type: 'json_schema' as 'json_schema',
 		jsonSchema: {
 			name: 'DialogueDoc',
-			description: `Extract every spoken line of dialogue from these audition sides. The actor's character is "${characterName.toUpperCase()}". Any dialogue spoken by this character is "myself". All other speakers are "reader".`,
+			description:
+				`Extract only spoken lines of dialogue from these audition sides.\n` +
+				`The actor's character is "${characterName.toUpperCase()}". Use these rules:\n` +
+				`1) Include ONLY words that are actually spoken aloud in the scene.\n` +
+				`   - Do NOT include scene headings (INT./EXT.), role labels, or section titles.\n` +
+				`   - Do NOT include action lines, stage directions, or description.\n` +
+				`   - Do NOT include instructions to actors (e.g. self‑tape guidelines).\n` +
+				`2) For every line spoken by "${characterName.toUpperCase()}" (including variants like NAME or NAME (CONT'D)), set role = "myself".\n` +
+				`3) For every line spoken by any other character or narrator, set role = "reader".\n` +
+				`4) Skip standalone character name labels if they are not spoken; only include the spoken text that follows.\n` +
+				`5) Each entry in lines should correspond to one turn of dialogue (one character speaking).\n` +
+				`6) Include EVERY line of dialogue from the script. Do not skip any lines.`,
 			schemaDefinition: {
 				type: 'object',
 				properties: {
