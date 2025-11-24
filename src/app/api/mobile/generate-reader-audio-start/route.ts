@@ -33,6 +33,16 @@ async function processJob(jobId: string, body: StartRequestBody) {
 			);
 		}
 
+		console.log('[reader-audio] Starting ElevenLabs job', {
+			jobId,
+			sceneId: body.sceneId,
+			sceneTitle: body.sceneTitle,
+			totalLines: body.lines.length,
+			hasApiKey: Boolean(elevenKey),
+			hasMaleVoiceId: Boolean(maleVoiceId),
+			hasFemaleVoiceId: Boolean(femaleVoiceId)
+		});
+
 		const client = new ElevenLabsClient({
 			apiKey: elevenKey
 		});
@@ -40,69 +50,94 @@ async function processJob(jobId: string, body: StartRequestBody) {
 		const totalLines = body.lines.length;
 		let generatedCount = 0;
 
-		// Process TTS in batches of 6 to limit concurrent requests against ElevenLabs.
-		const concurrency = 6;
-		for (let i = 0; i < body.lines.length; i += concurrency) {
-			const batch = body.lines.slice(i, i + concurrency);
+		// Process each line sequentially; clients can send requests concurrently,
+		// but we avoid batching multiple lines into a single ElevenLabs call.
+		for (const [lineId, _role, text, preferredVoice] of body.lines) {
+			const voiceId =
+				preferredVoice === 'male_presenting' ? maleVoiceId : femaleVoiceId;
 
-			await Promise.all(
-				batch.map(async ([lineId, _role, text, preferredVoice]) => {
-					const voiceId =
-						preferredVoice === 'male_presenting' ? maleVoiceId : femaleVoiceId;
+			const startedAt = Date.now();
+			console.log('[reader-audio] ElevenLabs TTS request', {
+				jobId,
+				lineId,
+				voiceId,
+				textLength: text.length
+			});
 
-					let audioBuffer: Buffer;
-					try {
-						const audioResult = await client.textToSpeech.convert(voiceId, {
-							text,
-							modelId: 'eleven_flash_v2_5',
-							voiceSettings: {
-								stability: 0.5,
-								similarityBoost: 0.75
-							}
-						});
-
-						if (audioResult instanceof ReadableStream) {
-							// SDK returned a web ReadableStream – consume it fully into a Buffer
-							const arrayBuffer = await new Response(audioResult).arrayBuffer();
-							audioBuffer = Buffer.from(arrayBuffer);
-						} else if (Buffer.isBuffer(audioResult)) {
-							audioBuffer = audioResult;
-						} else {
-							// Assume Uint8Array or ArrayBuffer-like
-							audioBuffer = Buffer.from(audioResult as Uint8Array);
-						}
-					} catch (err) {
-						console.error('ElevenLabs SDK TTS error for line', lineId, err);
-
-						const currentJob = readerAudioJobs.get(jobId);
-						if (currentJob) {
-							currentJob.status = 'error';
-							currentJob.error = 'Failed to generate reader audio from ElevenLabs.';
-							readerAudioJobs.set(jobId, currentJob);
-						}
-						return;
+			let audioBuffer: Buffer;
+			try {
+				const audioResult = await client.textToSpeech.convert(voiceId, {
+					text,
+					modelId: 'eleven_flash_v2_5',
+					voiceSettings: {
+						stability: 0.5,
+						similarityBoost: 0.75
 					}
+				});
 
-					// Phase 1: expose base64 audio immediately for client playback.
-					const base64DataUrl = `data:audio/mpeg;base64,${audioBuffer.toString('base64')}`;
-					const jobForTemp = readerAudioJobs.get(jobId);
-					if (jobForTemp) {
-						const existingIndex = jobForTemp.audio.findIndex(([id]) => id === lineId);
-						if (existingIndex >= 0) {
-							jobForTemp.audio[existingIndex] = [lineId, base64DataUrl];
-						} else {
-							jobForTemp.audio.push([lineId, base64DataUrl]);
-						}
+				const elapsedMs = Date.now() - startedAt;
+				console.log('[reader-audio] ElevenLabs TTS success', {
+					jobId,
+					lineId,
+					elapsedMs,
+					resultType: audioResult instanceof ReadableStream
+						? 'ReadableStream'
+						: Buffer.isBuffer(audioResult)
+							? 'Buffer'
+							: typeof audioResult
+				});
 
-						generatedCount += 1;
-						if (generatedCount === totalLines && jobForTemp.status !== 'error') {
-							jobForTemp.status = 'complete';
-						}
+				if (audioResult instanceof ReadableStream) {
+					// SDK returned a web ReadableStream – consume it fully into a Buffer
+					const arrayBuffer = await new Response(audioResult).arrayBuffer();
+					audioBuffer = Buffer.from(arrayBuffer);
+				} else if (Buffer.isBuffer(audioResult)) {
+					audioBuffer = audioResult;
+				} else {
+					// Assume Uint8Array or ArrayBuffer-like
+					audioBuffer = Buffer.from(audioResult as Uint8Array);
+				}
+			} catch (err) {
+				const elapsedMs = Date.now() - startedAt;
+				console.error('[reader-audio] ElevenLabs SDK TTS error', {
+					jobId,
+					lineId,
+					voiceId,
+					elapsedMs,
+					error: err instanceof Error ? err.message : String(err)
+				});
 
-						readerAudioJobs.set(jobId, jobForTemp);
-					}
-				})
-			);
+				const currentJob = readerAudioJobs.get(jobId);
+				if (currentJob) {
+					currentJob.status = 'error';
+					currentJob.error = 'Failed to generate reader audio from ElevenLabs.';
+					readerAudioJobs.set(jobId, currentJob);
+				}
+				continue;
+			}
+
+			// Phase 1: expose base64 audio immediately for client playback.
+			const base64DataUrl = `data:audio/mpeg;base64,${audioBuffer.toString('base64')}`;
+			const jobForTemp = readerAudioJobs.get(jobId);
+			if (jobForTemp) {
+				const existingIndex = jobForTemp.audio.findIndex(([id]) => id === lineId);
+				if (existingIndex >= 0) {
+					jobForTemp.audio[existingIndex] = [lineId, base64DataUrl];
+				} else {
+					jobForTemp.audio.push([lineId, base64DataUrl]);
+				}
+
+				generatedCount += 1;
+				if (generatedCount === totalLines && jobForTemp.status !== 'error') {
+					jobForTemp.status = 'complete';
+					console.log('[reader-audio] ElevenLabs job complete', {
+						jobId,
+						totalLines
+					});
+				}
+
+				readerAudioJobs.set(jobId, jobForTemp);
+			}
 		}
 	} catch (e) {
 		console.error('Error processing reader audio job', e);
