@@ -53,7 +53,16 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 		throw new Error('Mistral OCR did not return a document annotation.');
 	}
 
-	const parsed = DialogueDocSchema.parse(rawAnnotation);
+	let annotationObject: unknown = rawAnnotation;
+	if (typeof rawAnnotation === 'string') {
+		try {
+			annotationObject = JSON.parse(rawAnnotation);
+		} catch (err) {
+			throw new Error('Failed to parse document annotation JSON from Mistral OCR response.');
+		}
+	}
+
+	const parsed = DialogueDocSchema.parse(annotationObject);
 
 	return parsed;
 }
