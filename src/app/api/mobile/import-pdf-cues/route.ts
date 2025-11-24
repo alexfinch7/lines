@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { extractDialogueFromPdf } from '@/lib/extractDialogue';
+import { uploadToStorageAndGetUrl } from '@/lib/uploadToStorage';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60; // Grok can take ~20–40s on big PDFs
+export const maxDuration = 60;
 
 type Cue = ['myself' | 'reader', string];
 type ParsedLines = { lines: Cue[] };
@@ -27,194 +29,22 @@ export async function POST(request: Request) {
 			);
 		}
 
-		const apiKey = process.env.XAI_API_KEY;
-		if (!apiKey) {
-			return NextResponse.json({ error: 'Missing XAI_API_KEY' }, { status: 500 });
+		if (!process.env.MISTRAL_API_KEY) {
+			return NextResponse.json({ error: 'Missing MISTRAL_API_KEY' }, { status: 500 });
 		}
 
-		// Step 1: Upload the PDF to xAI using multipart/form-data (OpenAI-compatible Files API)
-		const fileArrayBuffer = await file.arrayBuffer();
-		const blob = new Blob([fileArrayBuffer], {
-			type: file.type || 'application/pdf'
-		});
+		// 1) Upload PDF to storage and obtain a public URL that Mistral can fetch
+		const pdfUrl = await uploadToStorageAndGetUrl(file);
 
-		const uploadForm = new FormData();
-		// "file" is the field name xAI expects (OpenAI compatible)
-		uploadForm.append('file', blob, (file as any).name ?? 'sides.pdf');
-		// Purpose must be "assistants" so the file can be used with file_search tools.
-		uploadForm.append('purpose', 'assistants');
+		// 2) Use Mistral OCR + document annotations to extract structured dialogue
+		const dialogueDoc = await extractDialogueFromPdf({ pdfUrl, characterName });
 
-		const uploadResponse = await fetch('https://api.x.ai/v1/files', {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${apiKey}`
-				// Do not set Content-Type; fetch will add the multipart boundary.
-			},
-			body: uploadForm
-		});
+		const lines: Cue[] = dialogueDoc.lines.map((line) => [line.role, line.text]);
 
-		if (!uploadResponse.ok) {
-			const err = await uploadResponse.text().catch(() => 'Unknown error');
-			console.error('File upload failed:', err);
-			return NextResponse.json({ error: 'Failed to upload PDF' }, { status: 502 });
-		}
-
-		const uploadedJson: any = await uploadResponse.json();
-		console.log(
-			'xAI file upload response for import-pdf-cues:',
-			JSON.stringify(uploadedJson, null, 2)
-		);
-		const file_id = uploadedJson?.file_id ?? uploadedJson?.id;
-
-		if (!file_id || typeof file_id !== 'string') {
-			console.error(
-				'Unexpected xAI file upload response:',
-				JSON.stringify(uploadedJson, null, 2)
-			);
-			return NextResponse.json(
-				{ error: 'xAI file upload did not return a valid file id.' },
-				{ status: 502 }
-			);
-		}
-
-		// Step 2: Call xAI Responses API with a file_search attachment on the uploaded PDF.
-		const prompt = `You are an expert casting assistant. Extract every spoken line of dialogue from the attached audition sides PDF.
-
-Rules:
-- Character names are in ALL CAPS before their lines (e.g. MAX, ZOE, MICHELLE)
-- The actor's character is "${characterName.toUpperCase()}". Any line under ${characterName.toUpperCase()}, ${
-			characterName.toUpperCase()
-		} (CONT’D), etc. belongs to them.
-- Mark their lines as "myself"
-- All other spoken lines are "reader"
-- Ignore scene headings, page numbers, and pure stage directions, but do NOT ignore any actual spoken dialogue.
-
-Return ONLY valid JSON in this exact shape (no backticks, no extra keys, no comments):
-
-{
-  "lines": [
-    ["myself" | "reader", "Exact line of dialogue here"]
-  ]
-}`;
-
-		const responsesPayload = {
-			model: 'grok-4-fast',
-			input: [
-				{
-					role: 'user',
-					content: prompt,
-					attachments: [
-						{
-							file_id,
-							tools: [{ type: 'file_search' as const }]
-						}
-					]
-				}
-			]
-		};
+		const responseBody: ParsedLines = { lines };
 
 		console.log(
-			'Calling xAI /responses for import-pdf-cues with payload:',
-			JSON.stringify(
-				{
-					...responsesPayload,
-					// Redact prompt text for logs to reduce noise
-					input: responsesPayload.input.map((item) => ({
-						...item,
-						content: '[omitted prompt text in logs]'
-					}))
-				},
-				null,
-				2
-			)
-		);
-
-		const responsesRes = await fetch('https://api.x.ai/v1/responses', {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify(responsesPayload)
-		});
-
-		if (!responsesRes.ok) {
-			const err = await responsesRes.text().catch(() => 'Unknown error');
-			console.error('xAI /responses API error for import-pdf-cues:', err);
-			return NextResponse.json(
-				{ error: 'Failed to process script with Grok /responses.' },
-				{ status: 502 }
-			);
-		}
-
-		const data: any = await responsesRes.json();
-		console.log('Raw xAI /responses JSON for import-pdf-cues:', JSON.stringify(data, null, 2));
-
-		// The Responses API may expose output_text directly, or an output array with text content.
-		const content =
-			typeof data.output_text === 'string'
-				? data.output_text
-				: Array.isArray(data.output)
-					? (() => {
-							const first = data.output[0];
-							// OpenAI/xAI-style: find a message or text content entry.
-							if (first?.content && typeof first.content[0]?.text === 'string') {
-								return first.content[0].text;
-							}
-							return null;
-						})()
-					: null;
-		let raw = '';
-
-		if (typeof content === 'string') {
-			raw = content.trim();
-		} else if (Array.isArray(content)) {
-			// Some xAI responses may use an array of content parts
-			const textPart = content.find(
-				(part: any) => part && typeof part.text === 'string'
-			);
-			if (textPart) {
-				raw = (textPart.text as string).trim();
-			}
-		}
-
-		if (!raw) {
-			console.error('Empty or non-string content from Grok:', JSON.stringify(data, null, 2));
-			return NextResponse.json(
-				{ error: 'Empty response from Grok' },
-				{ status: 502 }
-			);
-		}
-
-		let parsed: ParsedLines;
-		try {
-			parsed = JSON.parse(raw) as ParsedLines;
-		} catch (e) {
-			console.error('Invalid JSON from Grok:', raw);
-			return NextResponse.json({ error: 'Invalid response format' }, { status: 502 });
-		}
-
-		if (
-			!parsed ||
-			!Array.isArray(parsed.lines) ||
-			!parsed.lines.every(
-				(entry) =>
-					Array.isArray(entry) &&
-					entry.length === 2 &&
-					(entry[0] === 'myself' || entry[0] === 'reader') &&
-					typeof entry[1] === 'string'
-			)
-		) {
-			console.error(
-				'Parsed lines from Grok had wrong shape:',
-				JSON.stringify(parsed, null, 2)
-			);
-			return NextResponse.json({ error: 'Wrong shape from model' }, { status: 502 });
-		}
-
-		const responseBody = { lines: parsed.lines };
-		console.log(
-			'Sending import-pdf-cues response to client:',
+			'Sending import-pdf-cues response to client (Mistral annotations):',
 			JSON.stringify(responseBody, null, 2)
 		);
 
@@ -227,5 +57,4 @@ Return ONLY valid JSON in this exact shape (no backticks, no extra keys, no comm
 		);
 	}
 }
-
 
