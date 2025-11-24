@@ -10,29 +10,31 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 	const { pdfUrl, characterName } = options;
 
 	const documentAnnotationFormat = {
-		name: 'DialogueDoc',
-		description: `Extract every spoken line of dialogue from these audition sides. The actor's character is "${characterName.toUpperCase()}". Any dialogue spoken by this character is "myself". All other speakers are "reader".`,
-		json_schema: {
-			type: 'object',
-			properties: {
-				lines: {
-					type: 'array',
-					items: {
-						type: 'object',
-						properties: {
-							role: {
-								type: 'string',
-								enum: ['myself', 'reader']
+		jsonSchema: {
+			name: 'DialogueDoc',
+			description: `Extract every spoken line of dialogue from these audition sides. The actor's character is "${characterName.toUpperCase()}". Any dialogue spoken by this character is "myself". All other speakers are "reader".`,
+			schemaDefinition: {
+				type: 'object',
+				properties: {
+					lines: {
+						type: 'array',
+						items: {
+							type: 'object',
+							properties: {
+								role: {
+									type: 'string',
+									enum: ['myself', 'reader']
+								},
+								text: {
+									type: 'string'
+								}
 							},
-							text: {
-								type: 'string'
-							}
-						},
-						required: ['role', 'text']
+							required: ['role', 'text']
+						}
 					}
-				}
-			},
-			required: ['lines']
+				},
+				required: ['lines']
+			}
 		}
 	};
 
@@ -41,8 +43,7 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 		document: {
 			documentUrl: pdfUrl
 		},
-		// TS type uses camelCase, server expects snake_case; SDK handles translation
-		documentAnnotationFormat: documentAnnotationFormat as any
+		documentAnnotationFormat
 	});
 
 	const rawAnnotation =
