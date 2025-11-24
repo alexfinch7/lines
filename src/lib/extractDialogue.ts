@@ -42,8 +42,8 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 	const ocrResponse = await mistral.ocr.process({
 		model: 'mistral-ocr-latest',
 		document: {
-			type: 'document_url',
-			document_url: pdfUrl
+			// The TS SDK expects camelCase `documentUrl` and no explicit type
+			documentUrl: pdfUrl
 		},
 		documentAnnotationFormat
 	} as any);
