@@ -11,7 +11,8 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 
 	const documentAnnotationFormat = {
 		name: 'DialogueDoc',
-		schema: {
+		description: `Extract every spoken line of dialogue from these audition sides. The actor's character is "${characterName.toUpperCase()}". Any dialogue spoken by this character is "myself". All other speakers are "reader".`,
+		json_schema: {
 			type: 'object',
 			properties: {
 				lines: {
@@ -21,13 +22,10 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 						properties: {
 							role: {
 								type: 'string',
-								enum: ['myself', 'reader'],
-								description:
-									'"myself" if the line belongs to the actor’s character, "reader" otherwise.'
+								enum: ['myself', 'reader']
 							},
 							text: {
-								type: 'string',
-								description: 'Exact spoken line of dialogue.'
+								type: 'string'
 							}
 						},
 						required: ['role', 'text']
@@ -35,17 +33,15 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 				}
 			},
 			required: ['lines']
-		},
-		description: `Extract every spoken line of dialogue from these audition sides. The actor's character is "${characterName.toUpperCase()}". Any dialogue spoken by this character is "myself". All other speakers are "reader".`
+		}
 	};
 
 	const ocrResponse = await mistral.ocr.process({
 		model: 'mistral-ocr-latest',
 		document: {
-			// The TS SDK expects camelCase `documentUrl` and no explicit type
-			documentUrl: pdfUrl
+			document_url: pdfUrl
 		},
-		documentAnnotationFormat
+		document_annotation_format: documentAnnotationFormat
 	} as any);
 
 	const rawAnnotation =
