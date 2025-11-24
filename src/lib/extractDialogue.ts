@@ -39,10 +39,11 @@ export async function extractDialogueFromPdf(options: ExtractDialogueOptions) {
 	const ocrResponse = await mistral.ocr.process({
 		model: 'mistral-ocr-latest',
 		document: {
-			document_url: pdfUrl
+			documentUrl: pdfUrl
 		},
-		document_annotation_format: documentAnnotationFormat
-	} as any);
+		// TS type uses camelCase, server expects snake_case; SDK handles translation
+		documentAnnotationFormat: documentAnnotationFormat as any
+	});
 
 	const rawAnnotation =
 		(ocrResponse as any).document_annotation ?? (ocrResponse as any).documentAnnotation;
