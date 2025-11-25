@@ -30,6 +30,40 @@ export async function POST(request: Request) {
 		if (!sceneId) {
 			return NextResponse.json({ error: 'sceneId is required' }, { status: 400 });
 		}
+
+		// First, check if a share session already exists for this scene. We keep a single
+		// share link per scene so the same URL is reused instead of creating duplicates.
+		const { data: existing, error: existingError } = await supabaseAnon
+			.from('share_sessions')
+			.select('id, title, scene_id')
+			.eq('scene_id', sceneId)
+			.order('created_at', { ascending: false })
+			.limit(1)
+			.maybeSingle();
+
+		// Derive base URL from request headers when possible (works on Vercel), fallback to env or localhost
+		const forwardedProto = request.headers.get('x-forwarded-proto');
+		const host = request.headers.get('host');
+		const baseUrl =
+			(forwardedProto && host ? `${forwardedProto}://${host}` : undefined) ||
+			process.env.NEXT_PUBLIC_BASE_URL ||
+			'http://localhost:3000';
+
+		if (!existingError && existing) {
+			const existingId = existing.id as string;
+			const shareUrl = `${baseUrl}/share/${existingId}`;
+
+			return NextResponse.json({
+				shareUrl,
+				sessionId: existingId,
+				session: {
+					id: existingId,
+					sceneId: existing.scene_id,
+					title: existing.title
+				}
+			});
+		}
+
 		// Load canonical scene lines + audio from Supabase so we can
 		// auto-populate the share session from the backend, not the client.
 		const { data: liveLines, error: liveLinesError } = await supabaseAdmin
@@ -109,15 +143,6 @@ export async function POST(request: Request) {
 		}
 
 		const session = data as ShareSession;
-
-		// Derive base URL from request headers when possible (works on Vercel), fallback to env or localhost
-		const forwardedProto = request.headers.get('x-forwarded-proto');
-		const host = request.headers.get('host');
-		const baseUrl =
-			(forwardedProto && host ? `${forwardedProto}://${host}` : undefined) ||
-			process.env.NEXT_PUBLIC_BASE_URL ||
-			'http://localhost:3000';
-
 		const sessionId = session.id;
 		const shareUrl = `${baseUrl}/share/${sessionId}`;
 

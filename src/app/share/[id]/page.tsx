@@ -26,14 +26,19 @@ export default async function SharePage({ params }: Props) {
 		);
 	}
 
-	const { session, sceneVersion } = (await res.json()) as {
+	const { session, sceneVersion, lineUpdatedAt } = (await res.json()) as {
 		session: ShareSession;
 		sceneVersion?: string;
+		lineUpdatedAt?: Record<string, string>;
 	};
 
 	return (
 		<main style={{ padding: 24, maxWidth: 800, margin: '0 auto' }}>
-			<ShareClient initialSession={session} initialSceneVersion={sceneVersion} />
+			<ShareClient
+				initialSession={session}
+				initialSceneVersion={sceneVersion}
+				initialLineUpdatedAt={lineUpdatedAt}
+			/>
 		</main>
 	);
 }

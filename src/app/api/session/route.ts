@@ -92,16 +92,16 @@ export async function GET(request: Request) {
 
 	const baseSession = data as ShareSession & { scene_id: string };
 
-	// 2) Try to hydrate actor/reader line text and ordering from the live script lines table.
-	// This lets share links always reflect the latest script edits while still preserving
-	// any existing recording URLs stored on the share session.
+	// 2) Always hydrate actor/reader line text, ordering, and default audio from the
+	// canonical Supabase `lines` table for this scene. We no longer trust any client-
+	// provided scene layout stored on the share session, only per-session recordings.
 	// Use the admin client here so we bypass RLS and always see the canonical script.
 	const { data: liveLines, error: liveLinesError } = await supabaseAdmin
 		.from('lines')
-		.select('id, raw_text, order_index, is_stage_direction, is_cue_line, audio_url')
+		.select('id, raw_text, order_index, is_stage_direction, is_cue_line, audio_url, updated_at')
 		.eq('script_id', baseSession.scene_id);
 
-	if (!liveLinesError && liveLines) {
+	if (!liveLinesError && liveLines && liveLines.length > 0) {
 		const canonicalLines = (liveLines as {
 			id: string;
 			raw_text: string;
@@ -109,6 +109,7 @@ export async function GET(request: Request) {
 			is_stage_direction: boolean | null;
 			is_cue_line: boolean | null;
 			audio_url: string | null;
+			updated_at: string | null;
 		}[]).sort((a, b) => {
 			if (a.order_index === b.order_index) {
 				return a.id.localeCompare(b.id);
@@ -118,64 +119,48 @@ export async function GET(request: Request) {
 			return a.order_index - b.order_index;
 		});
 
-		const hasStoredLines =
-			(baseSession.actor_lines && baseSession.actor_lines.length > 0) ||
-			(baseSession.reader_lines && baseSession.reader_lines.length > 0);
-
 		let actorLines: ActorLine[] = [];
 		let readerLines: ReaderLine[] = [];
 
-		if (hasStoredLines) {
-			// Legacy / client-provided share sessions: preserve stored line sets and
-			// just refresh text + ordering from the canonical script.
-			const byId = new Map<string, { raw_text: string; order_index: number | null }>();
-			for (const line of canonicalLines) {
-				byId.set(line.id, {
-					raw_text: line.raw_text,
-					order_index: line.order_index
+		// Build maps of per-session recording overrides (audio only). These may come
+		// from reader uploads via /api/session/line or any future per-session actor
+		// recordings. Scene structure (which lines exist, their text/order) is always
+		// derived from `lines`, never from these arrays.
+		const actorAudioOverrides = new Map<string, string>();
+		for (const l of baseSession.actor_lines || []) {
+			if (l.audioUrl) actorAudioOverrides.set(l.lineId, l.audioUrl);
+		}
+
+		const readerAudioOverrides = new Map<string, string>();
+		for (const l of baseSession.reader_lines || []) {
+			if (l.audioUrl) readerAudioOverrides.set(l.lineId, l.audioUrl);
+		}
+
+		// Auto-populate both actor and reader lines directly from the canonical scene
+		// layout in Supabase, then layer per-session audio overrides on top.
+		for (const line of canonicalLines) {
+			if (line.is_stage_direction) continue;
+			const index = line.order_index ?? 0;
+
+			if (line.is_cue_line) {
+				const override = actorAudioOverrides.get(line.id);
+				actorLines.push({
+					lineId: line.id,
+					index,
+					text: line.raw_text,
+					audioUrl: override ?? line.audio_url ?? ''
 				});
-			}
-
-			actorLines =
-				baseSession.actor_lines?.map((l) => {
-					const canonical = byId.get(l.lineId);
-					return {
-						...l,
-						text: canonical?.raw_text ?? l.text,
-						index: canonical?.order_index ?? l.index
-					};
-				}) ?? [];
-
-			readerLines =
-				baseSession.reader_lines?.map((l) => {
-					const canonical = byId.get(l.lineId);
-					return {
-						...l,
-						text: canonical?.raw_text ?? l.text,
-						index: canonical?.order_index ?? l.index
-					};
-				}) ?? [];
-		} else {
-			// Synced shares: auto-populate both actor and reader lines directly from
-			// the canonical scene layout in Supabase.
-			for (const line of canonicalLines) {
-				if (line.is_stage_direction) continue;
-				const index = line.order_index ?? 0;
-
-				if (line.is_cue_line) {
-					actorLines.push({
-						lineId: line.id,
-						index,
-						text: line.raw_text,
-						audioUrl: line.audio_url ?? ''
-					});
-				} else {
-					readerLines.push({
-						lineId: line.id,
-						index,
-						text: line.raw_text
-					});
+			} else {
+				const override = readerAudioOverrides.get(line.id);
+				const readerLine: ReaderLine = {
+					lineId: line.id,
+					index,
+					text: line.raw_text
+				};
+				if (override) {
+					readerLine.audioUrl = override;
 				}
+				readerLines.push(readerLine);
 			}
 		}
 
@@ -184,6 +169,15 @@ export async function GET(request: Request) {
 			actor_lines: actorLines,
 			reader_lines: readerLines
 		};
+
+		// Capture the per-line updated_at timestamps so the client can perform
+		// optimistic concurrency checks on every recording + final submit.
+		const lineUpdatedAt: Record<string, string> = {};
+		for (const line of canonicalLines) {
+			if (line.updated_at) {
+				lineUpdatedAt[line.id] = line.updated_at;
+			}
+		}
 
 		// Scene version is derived from the full canonical line list, so additions/removals
 		// of lines (not just text changes) are detected as well.
@@ -200,32 +194,19 @@ export async function GET(request: Request) {
 			)
 			.digest('hex');
 
-		return NextResponse.json({ session: hydratedSession, sceneVersion });
+		return NextResponse.json({ session: hydratedSession, sceneVersion, lineUpdatedAt });
 	}
 
-	// Fallback: if we couldn't load live lines, just return the stored snapshot with a
-	// version derived from the stored actor/reader lines.
-	const snapshotSession = baseSession as ShareSession;
-	const sceneVersion = crypto
-		.createHash('sha1')
-		.update(
-			JSON.stringify({
-				actor:
-					snapshotSession.actor_lines?.map((l) => ({
-						id: l.lineId,
-						idx: l.index,
-						text: l.text
-					})) ?? [],
-				reader:
-					snapshotSession.reader_lines?.map((l) => ({
-						id: l.lineId,
-						idx: l.index,
-						text: l.text
-					})) ?? []
-			})
-		)
-		.digest('hex');
-
-	return NextResponse.json({ session: snapshotSession, sceneVersion });
+	// If we couldn't load canonical lines for this scene, fail fast instead of
+	// falling back to any client-provided snapshot. Canonical Supabase lines are
+  	// the single source of truth for scene content.
+	console.error('Failed to load canonical lines for share session', {
+		sceneId: baseSession.scene_id,
+		error: liveLinesError
+	});
+	return NextResponse.json(
+		{ error: 'Failed to load scene lines from backend' },
+		{ status: 500 }
+	);
 }
 

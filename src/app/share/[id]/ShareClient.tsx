@@ -8,14 +8,22 @@ import type { ShareSession, ActorLine, ReaderLine } from '@/types/share';
 type Props = {
 	initialSession: ShareSession;
 	initialSceneVersion?: string;
+	initialLineUpdatedAt?: Record<string, string>;
 };
 
-export default function ShareClient({ initialSession, initialSceneVersion }: Props) {
+export default function ShareClient({
+	initialSession,
+	initialSceneVersion,
+	initialLineUpdatedAt
+}: Props) {
 	const [session, setSession] = useState<ShareSession>(initialSession);
 	const [sceneVersion, setSceneVersion] = useState<string | undefined>(initialSceneVersion);
 	const [sceneOutOfDate, setSceneOutOfDate] = useState(false);
 	const [activeRecordingLineId, setActiveRecordingLineId] = useState<string | null>(null);
 	const [playingLineId, setPlayingLineId] = useState<string | null>(null);
+	const [lineTimestampsSnapshot] = useState<Record<string, string> | undefined>(
+		initialLineUpdatedAt
+	);
 
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 	const streamRef = useRef<MediaStream | null>(null);
@@ -64,6 +72,67 @@ export default function ShareClient({ initialSession, initialSceneVersion }: Pro
 		await playAudio(withCacheBust(actor.audioUrl), actor.lineId);
 	};
 
+	const timestampsEqual = (
+		initial?: Record<string, string>,
+		latest?: Record<string, string>
+	): boolean => {
+		if (!initial || !latest) return true;
+		const initialKeys = Object.keys(initial);
+		const latestKeys = Object.keys(latest);
+		if (initialKeys.length !== latestKeys.length) return false;
+		for (const key of initialKeys) {
+			if (!(key in latest)) return false;
+			if (initial[key] !== latest[key]) return false;
+		}
+		return true;
+	};
+
+	const verifySceneFreshnessOrBlock = async (): Promise<boolean> => {
+		// If we don't have a baseline snapshot, we can't safely verify; block to avoid
+		// recording against a possibly stale scene.
+		if (!session.id || !lineTimestampsSnapshot) {
+			setSceneOutOfDate(true);
+			alert(
+				"Uh-Oh! We couldn't verify whether this scene changed. Please reload the page before recording."
+			);
+			return false;
+		}
+
+		try {
+			const res = await fetch(`/api/session?id=${session.id}`, {
+				method: 'GET',
+				headers: { Accept: 'application/json' },
+				cache: 'no-store'
+			});
+			if (!res.ok) {
+				console.error('Failed to refresh scene timestamps', await res.text());
+				setSceneOutOfDate(true);
+				alert(
+					"Uh-Oh! We couldn't verify whether this scene changed. Please reload the page before recording."
+				);
+				return false;
+			}
+
+			const data = (await res.json()) as { lineUpdatedAt?: Record<string, string> };
+			if (!timestampsEqual(lineTimestampsSnapshot, data.lineUpdatedAt)) {
+				setSceneOutOfDate(true);
+				alert(
+					"Uh-Oh! It seems like the scene you're reading for was edited. Please reload this link after your actor finalizes their changes."
+				);
+				return false;
+			}
+
+			return true;
+		} catch (e) {
+			console.error('Failed to check scene timestamps', e);
+			setSceneOutOfDate(true);
+			alert(
+				"Uh-Oh! We couldn't verify whether this scene changed. Please reload the page before recording."
+			);
+			return false;
+		}
+	};
+
 	const startRecording = async (reader: ReaderLine) => {
 		// If the scene has been edited while the guest is recording, prevent further
 		// recording until they reload to see the latest version.
@@ -77,6 +146,12 @@ export default function ShareClient({ initialSession, initialSceneVersion }: Pro
 
 		// Prevent starting a new recording while one is in progress
 		if (activeRecordingLineId) return;
+
+		// Each time before starting a new recording, verify that none of the scene's
+		// lines have been edited in Supabase since the guest loaded this page.
+		const fresh = await verifySceneFreshnessOrBlock();
+		if (!fresh) return;
+
 		try {
 			// Reuse a single audio stream for all recordings to avoid repeated permission / lag
 			let stream = streamRef.current;
@@ -137,49 +212,15 @@ export default function ShareClient({ initialSession, initialSceneVersion }: Pro
 		}
 		const { url } = await uploadRes.json();
 
-		const updateRes = await fetch('/api/session/line', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ sessionId: session.id, lineId, audioUrl: url })
-		});
-		if (!updateRes.ok) {
-			console.error(await updateRes.text());
-			alert('Failed to save line metadata');
-			return;
-		}
-
+		// Do not persist any line metadata to Supabase until the guest clicks
+		// "Submit Lines". For now we only update local state so they can review
+		// recordings, and we commit changes in a single batch at submit time.
 		setSession((prev) => {
 			const updatedReaderLines = [...(prev.reader_lines || [])].map((l) =>
 				l.lineId === lineId ? { ...l, audioUrl: url } : l
 			);
 			return { ...prev, reader_lines: updatedReaderLines };
 		});
-
-		// After each successful line recording, check whether the underlying scene
-		// has changed on the server compared to what the guest initially loaded.
-		// If it has, prompt them to reload before continuing.
-		if (sceneVersion && session.id) {
-			try {
-				const res = await fetch(`/api/session?id=${session.id}`, {
-					method: 'GET',
-					headers: { Accept: 'application/json' },
-					cache: 'no-store'
-				});
-				if (res.ok) {
-					const data = (await res.json()) as { sceneVersion?: string };
-					if (data.sceneVersion && data.sceneVersion !== sceneVersion) {
-						setSceneVersion(data.sceneVersion);
-						setSceneOutOfDate(true);
-						alert(
-							"Uh-Oh! It seems like the scene you're reading for is actively being edited. " +
-								'Please reload the page after your actor finalizes their changes.'
-						);
-					}
-				}
-			} catch (e) {
-				console.error('Failed to check scene version', e);
-			}
-		}
 	};
 
 	const markDone = async () => {
@@ -188,6 +229,54 @@ export default function ShareClient({ initialSession, initialSceneVersion }: Pro
 				"Uh-Oh! It seems like the scene you're reading for is actively being edited. " +
 					'Please reload the page after your actor finalizes their changes before submitting.'
 			);
+			return;
+		}
+
+		// Before we submit any recordings to Supabase, perform a final optimistic
+		// concurrency check on all lines. If any line's updated_at changed since the
+		// guest loaded this page, abort and ask them to reload.
+		if (!lineTimestampsSnapshot) {
+			alert(
+				"Uh-Oh! We couldn't verify whether this scene changed. Please reload the page before submitting."
+			);
+			return;
+		}
+
+		try {
+			const updates = readerLines
+				.filter((l) => !!l.audioUrl)
+				.map((l) => ({
+					lineId: l.lineId,
+					audioUrl: l.audioUrl as string
+				}));
+
+			const commitRes = await fetch('/api/session/commit', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					sessionId: session.id,
+					lineTimestamps: lineTimestampsSnapshot,
+					updates
+				})
+			});
+
+			if (!commitRes.ok) {
+				const body = await commitRes.json().catch(() => ({}));
+				if (commitRes.status === 409) {
+					setSceneOutOfDate(true);
+					alert(
+						body?.error ??
+							"Uh-Oh! It seems like the scene you're reading for was edited. Please reload this link before submitting."
+					);
+				} else {
+					console.error('Failed to commit lines', body);
+					alert(body?.error ?? 'Failed to submit lines. Please try again.');
+				}
+				return;
+			}
+		} catch (e) {
+			console.error('Failed to commit lines', e);
+			alert('Failed to submit lines. Please try again.');
 			return;
 		}
 
