@@ -98,53 +98,91 @@ export async function GET(request: Request) {
 	// Use the admin client here so we bypass RLS and always see the canonical script.
 	const { data: liveLines, error: liveLinesError } = await supabaseAdmin
 		.from('lines')
-		.select('id, raw_text, order_index')
+		.select('id, raw_text, order_index, is_stage_direction, is_cue_line, audio_url')
 		.eq('script_id', baseSession.scene_id);
 
 	if (!liveLinesError && liveLines) {
-		const canonicalLines = (liveLines as { id: string; raw_text: string; order_index: number | null }[]).sort(
-			(a, b) => {
-				if (a.order_index === b.order_index) {
-					return a.id.localeCompare(b.id);
-				}
-				if (a.order_index == null) return 1;
-				if (b.order_index == null) return -1;
-				return a.order_index - b.order_index;
+		const canonicalLines = (liveLines as {
+			id: string;
+			raw_text: string;
+			order_index: number | null;
+			is_stage_direction: boolean | null;
+			is_cue_line: boolean | null;
+			audio_url: string | null;
+		}[]).sort((a, b) => {
+			if (a.order_index === b.order_index) {
+				return a.id.localeCompare(b.id);
 			}
-		);
+			if (a.order_index == null) return 1;
+			if (b.order_index == null) return -1;
+			return a.order_index - b.order_index;
+		});
 
-		const byId = new Map<string, { raw_text: string; order_index: number | null }>();
-		for (const line of canonicalLines) {
-			byId.set(line.id, {
-				raw_text: line.raw_text,
-				order_index: line.order_index
-			});
+		const hasStoredLines =
+			(baseSession.actor_lines && baseSession.actor_lines.length > 0) ||
+			(baseSession.reader_lines && baseSession.reader_lines.length > 0);
+
+		let actorLines: ActorLine[] = [];
+		let readerLines: ReaderLine[] = [];
+
+		if (hasStoredLines) {
+			// Legacy / client-provided share sessions: preserve stored line sets and
+			// just refresh text + ordering from the canonical script.
+			const byId = new Map<string, { raw_text: string; order_index: number | null }>();
+			for (const line of canonicalLines) {
+				byId.set(line.id, {
+					raw_text: line.raw_text,
+					order_index: line.order_index
+				});
+			}
+
+			actorLines =
+				baseSession.actor_lines?.map((l) => {
+					const canonical = byId.get(l.lineId);
+					return {
+						...l,
+						text: canonical?.raw_text ?? l.text,
+						index: canonical?.order_index ?? l.index
+					};
+				}) ?? [];
+
+			readerLines =
+				baseSession.reader_lines?.map((l) => {
+					const canonical = byId.get(l.lineId);
+					return {
+						...l,
+						text: canonical?.raw_text ?? l.text,
+						index: canonical?.order_index ?? l.index
+					};
+				}) ?? [];
+		} else {
+			// Synced shares: auto-populate both actor and reader lines directly from
+			// the canonical scene layout in Supabase.
+			for (const line of canonicalLines) {
+				if (line.is_stage_direction) continue;
+				const index = line.order_index ?? 0;
+
+				if (line.is_cue_line) {
+					actorLines.push({
+						lineId: line.id,
+						index,
+						text: line.raw_text,
+						audioUrl: line.audio_url ?? ''
+					});
+				} else {
+					readerLines.push({
+						lineId: line.id,
+						index,
+						text: line.raw_text
+					});
+				}
+			}
 		}
-
-		const mergedActor =
-			baseSession.actor_lines?.map((l) => {
-				const canonical = byId.get(l.lineId);
-				return {
-					...l,
-					text: canonical?.raw_text ?? l.text,
-					index: canonical?.order_index ?? l.index
-				};
-			}) ?? [];
-
-		const mergedReader =
-			baseSession.reader_lines?.map((l) => {
-				const canonical = byId.get(l.lineId);
-				return {
-					...l,
-					text: canonical?.raw_text ?? l.text,
-					index: canonical?.order_index ?? l.index
-				};
-			}) ?? [];
 
 		const hydratedSession: ShareSession = {
 			...baseSession,
-			actor_lines: mergedActor,
-			reader_lines: mergedReader
+			actor_lines: actorLines,
+			reader_lines: readerLines
 		};
 
 		// Scene version is derived from the full canonical line list, so additions/removals

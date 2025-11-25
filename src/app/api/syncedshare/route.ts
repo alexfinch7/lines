@@ -1,7 +1,7 @@
 // src/app/api/syncedshare/route.ts
 import { NextResponse } from 'next/server';
 import { supabaseAdmin, supabaseAnon } from '@/lib/supabaseServer';
-import type { ShareSession } from '@/types/share';
+import type { ActorLine, ReaderLine, ShareSession } from '@/types/share';
 
 async function getUserFromRequest(request: Request) {
 	// Mobile / API: Authorization: Bearer <token>
@@ -30,17 +30,74 @@ export async function POST(request: Request) {
 		if (!sceneId) {
 			return NextResponse.json({ error: 'sceneId is required' }, { status: 400 });
 		}
+		// Load canonical scene lines + audio from Supabase so we can
+		// auto-populate the share session from the backend, not the client.
+		const { data: liveLines, error: liveLinesError } = await supabaseAdmin
+			.from('lines')
+			.select('id, order_index, raw_text, is_stage_direction, is_cue_line, audio_url')
+			.eq('script_id', sceneId);
 
-		// Insert a minimal share session that points at the canonical script/scene.
-		// Line text and ordering are hydrated on-demand via /api/session GET.
+		if (liveLinesError || !liveLines || liveLines.length === 0) {
+			console.error('No canonical lines found for scene', sceneId, liveLinesError);
+			return NextResponse.json(
+				{ error: 'No lines found for the provided sceneId' },
+				{ status: 404 }
+			);
+		}
+
+		const canonicalLines = (liveLines as {
+			id: string;
+			order_index: number | null;
+			raw_text: string;
+			is_stage_direction: boolean | null;
+			is_cue_line: boolean | null;
+			audio_url: string | null;
+		}[]).sort((a, b) => {
+			if (a.order_index === b.order_index) {
+				return a.id.localeCompare(b.id);
+			}
+			if (a.order_index == null) return 1;
+			if (b.order_index == null) return -1;
+			return a.order_index - b.order_index;
+		});
+
+		// Convention from the mobile app:
+		// - Non-cue lines are the READER's lines to record.
+		// - Cue lines are the ACTOR's lines; their audio comes from the scene.
+		const readerLines: ReaderLine[] = [];
+		const actorLines: ActorLine[] = [];
+
+		for (const line of canonicalLines) {
+			if (line.is_stage_direction) continue;
+			const index = line.order_index ?? 0;
+
+			if (line.is_cue_line) {
+				actorLines.push({
+					lineId: line.id,
+					index,
+					text: line.raw_text,
+					// Use the canonical scene audio if present; the share flow will still
+					// update audio per-session when new recordings are made.
+					audioUrl: line.audio_url ?? ''
+				});
+			} else {
+				readerLines.push({
+					lineId: line.id,
+					index,
+					text: line.raw_text
+				});
+			}
+		}
+
+		// Insert a share session that is fully populated from the canonical scene.
 		const { data, error } = await supabaseAnon
 			.from('share_sessions')
 			.insert({
 				title,
 				status: 'pending',
 				scene_id: sceneId,
-				actor_lines: [], // will be hydrated from backend canonical lines
-				reader_lines: [],
+				actor_lines: actorLines,
+				reader_lines: readerLines,
 				user_id: user.id
 			})
 			.select('*')
