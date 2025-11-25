@@ -6,7 +6,7 @@ import { supabaseClient } from '@/lib/supabaseClient';
 
 export default function LoginPage() {
 	const router = useRouter();
-	const [phone, setPhone] = useState('');
+	const [phone, setPhone] = useState('+1 ');
 	const [code, setCode] = useState('');
 	const [step, setStep] = useState<'phone' | 'code' | 'name'>('phone');
 	const [stageName, setStageName] = useState('');
