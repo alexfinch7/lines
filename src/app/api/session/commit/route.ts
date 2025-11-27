@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabaseServer';
 type CommitBody = {
 	sessionId?: string;
 	lineTimestamps?: Record<string, string>;
+	sceneUpdatedAt?: string;
 	updates?: { lineId: string; audioUrl: string }[];
 };
 
@@ -13,6 +14,7 @@ export async function POST(request: Request) {
 		const body = (await request.json().catch(() => ({}))) as CommitBody;
 		const sessionId = body.sessionId;
 		const lineTimestamps = body.lineTimestamps;
+		const sceneUpdatedAt = body.sceneUpdatedAt;
 		const updates = body.updates ?? [];
 
 		if (!sessionId || !lineTimestamps || updates.length === 0) {
@@ -34,6 +36,46 @@ export async function POST(request: Request) {
 		}
 
 		const sceneId = sessionRow.scene_id as string;
+
+		// 1b) Check if the scene is still sharable and verify the scene's updated_at
+		// Also get the user_id (owner) for storage path
+		const { data: sceneData, error: sceneError } = await supabaseAdmin
+			.from('scripts')
+			.select('sharable, updated_at, user_id')
+			.eq('id', sceneId)
+			.single();
+
+		if (sceneError || !sceneData) {
+			console.error('Failed to load scene for commit', { sceneId, error: sceneError });
+			return NextResponse.json(
+				{ error: 'Failed to load scene from backend' },
+				{ status: 500 }
+			);
+		}
+
+		const sceneOwnerId = sceneData.user_id as string;
+
+		// Check if scene is still sharable
+		if (!sceneData.sharable) {
+			return NextResponse.json(
+				{
+					error: 'This scene is no longer being shared. Please contact the scene owner.',
+					notSharable: true
+				},
+				{ status: 403 }
+			);
+		}
+
+		// Check if scene's updated_at has changed since the guest loaded the page
+		if (sceneUpdatedAt && sceneData.updated_at && sceneUpdatedAt !== sceneData.updated_at) {
+			return NextResponse.json(
+				{
+					error: 'The scene was edited after you opened this link. Please reload the page before submitting.',
+					conflict: true
+				},
+				{ status: 409 }
+			);
+		}
 
 		// 2) Fetch the current updated_at timestamps for all lines in this scene.
 		const { data: lines, error: linesError } = await supabaseAdmin
@@ -84,9 +126,9 @@ export async function POST(request: Request) {
 			);
 		}
 
-		// 4) With the global timestamps still matching, apply per-line updates using a
-		// conditional updated_at check for each line. This guards against races between
-		// the check above and individual updates.
+		// 4) Upload recordings from reader-recordings to lines bucket and update DB
+		const newUpdatedAt = new Date().toISOString();
+
 		for (const update of updates) {
 			const lastKnown = lineTimestamps[update.lineId];
 			if (!lastKnown) {
@@ -96,12 +138,69 @@ export async function POST(request: Request) {
 				);
 			}
 
-			const newUpdatedAt = new Date().toISOString();
+			// Download the recording from reader-recordings bucket
+			// The URL is like: https://xxx.supabase.co/storage/v1/object/public/reader-recordings/reader/{sessionId}/{lineId}.webm
+			// Extract the path from the URL
+			const url = new URL(update.audioUrl);
+			const pathMatch = url.pathname.match(/\/storage\/v1\/object\/public\/reader-recordings\/(.+)$/);
+			if (!pathMatch) {
+				console.error('Invalid audio URL format', { audioUrl: update.audioUrl });
+				return NextResponse.json(
+					{ error: 'Invalid audio URL format' },
+					{ status: 400 }
+				);
+			}
+			const sourcePath = pathMatch[1];
 
+			// Download the file from reader-recordings
+			const { data: fileData, error: downloadError } = await supabaseAdmin.storage
+				.from('reader-recordings')
+				.download(sourcePath);
+
+			if (downloadError || !fileData) {
+				console.error('Failed to download recording', {
+					sourcePath,
+					error: downloadError
+				});
+				return NextResponse.json(
+					{ error: 'Failed to download recording' },
+					{ status: 500 }
+				);
+			}
+
+			// Upload to lines bucket with structure: {user_id}/{script_id}/{line_id}.webm
+			const destPath = `${sceneOwnerId}/${sceneId}/${update.lineId}.webm`;
+			const arrayBuffer = await fileData.arrayBuffer();
+			const buffer = Buffer.from(arrayBuffer);
+
+			const { error: uploadError } = await supabaseAdmin.storage
+				.from('lines')
+				.upload(destPath, buffer, {
+					contentType: 'audio/webm',
+					upsert: true
+				});
+
+			if (uploadError) {
+				console.error('Failed to upload to lines bucket', {
+					destPath,
+					error: uploadError
+				});
+				return NextResponse.json(
+					{ error: 'Failed to upload recording' },
+					{ status: 500 }
+				);
+			}
+
+			// Get the public URL for the uploaded file
+			const { data: { publicUrl } } = supabaseAdmin.storage
+				.from('lines')
+				.getPublicUrl(destPath);
+
+			// Update the line in the database with new audio URL and timestamp
 			const { error: updateError, data } = await supabaseAdmin
 				.from('lines')
 				.update({
-					audio_url: update.audioUrl,
+					audio_url: publicUrl,
 					updated_at: newUpdatedAt
 				})
 				.eq('id', update.lineId)
@@ -125,11 +224,26 @@ export async function POST(request: Request) {
 			}
 		}
 
+		// 5) Update the scene's updated_at and set sharable to false
+		const { error: sceneUpdateError } = await supabaseAdmin
+			.from('scripts')
+			.update({
+				updated_at: newUpdatedAt,
+				sharable: false
+			})
+			.eq('id', sceneId);
+
+		if (sceneUpdateError) {
+			console.error('Failed to update scene', { sceneId, error: sceneUpdateError });
+			return NextResponse.json(
+				{ error: 'Failed to update scene' },
+				{ status: 500 }
+			);
+		}
+
 		return NextResponse.json({ ok: true });
 	} catch (e) {
 		console.error('Unexpected error in /api/session/commit', e);
 		return NextResponse.json({ error: 'Unexpected error' }, { status: 500 });
 	}
 }
-
-

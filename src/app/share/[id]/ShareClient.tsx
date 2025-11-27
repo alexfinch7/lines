@@ -9,21 +9,27 @@ type Props = {
 	initialSession: ShareSession;
 	initialSceneVersion?: string;
 	initialLineUpdatedAt?: Record<string, string>;
+	initialSceneUpdatedAt?: string;
+	initialSceneSharable?: boolean;
 };
 
 export default function ShareClient({
 	initialSession,
 	initialSceneVersion,
-	initialLineUpdatedAt
+	initialLineUpdatedAt,
+	initialSceneUpdatedAt,
+	initialSceneSharable
 }: Props) {
 	const [session, setSession] = useState<ShareSession>(initialSession);
 	const [sceneVersion, setSceneVersion] = useState<string | undefined>(initialSceneVersion);
 	const [sceneOutOfDate, setSceneOutOfDate] = useState(false);
+	const [sceneNoLongerSharable, setSceneNoLongerSharable] = useState(false);
 	const [activeRecordingLineId, setActiveRecordingLineId] = useState<string | null>(null);
 	const [playingLineId, setPlayingLineId] = useState<string | null>(null);
 	const [lineTimestampsSnapshot] = useState<Record<string, string> | undefined>(
 		initialLineUpdatedAt
 	);
+	const [sceneUpdatedAtSnapshot] = useState<string | undefined>(initialSceneUpdatedAt);
 
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 	const streamRef = useRef<MediaStream | null>(null);
@@ -104,6 +110,20 @@ export default function ShareClient({
 				headers: { Accept: 'application/json' },
 				cache: 'no-store'
 			});
+
+			// Check if the scene is no longer sharable (403 with notSharable flag)
+			if (res.status === 403) {
+				const errorBody = await res.json().catch(() => ({}));
+				if (errorBody?.notSharable) {
+					setSceneNoLongerSharable(true);
+					setSceneOutOfDate(true);
+					alert(
+						"Uh-Oh! This scene is no longer being shared. The scene owner has disabled sharing. Please reload the page or contact them for a new link."
+					);
+					return false;
+				}
+			}
+
 			if (!res.ok) {
 				console.error('Failed to refresh scene timestamps', await res.text());
 				setSceneOutOfDate(true);
@@ -113,11 +133,36 @@ export default function ShareClient({
 				return false;
 			}
 
-			const data = (await res.json()) as { lineUpdatedAt?: Record<string, string> };
+			const data = (await res.json()) as {
+				lineUpdatedAt?: Record<string, string>;
+				sceneUpdatedAt?: string;
+				sceneSharable?: boolean;
+			};
+
+			// Check if scene is still sharable
+			if (data.sceneSharable === false) {
+				setSceneNoLongerSharable(true);
+				setSceneOutOfDate(true);
+				alert(
+					"Uh-Oh! This scene is no longer being shared. The scene owner has disabled sharing. Please reload the page or contact them for a new link."
+				);
+				return false;
+			}
+
+			// Check if the scene's updated_at timestamp changed
+			if (sceneUpdatedAtSnapshot && data.sceneUpdatedAt && sceneUpdatedAtSnapshot !== data.sceneUpdatedAt) {
+				setSceneOutOfDate(true);
+				alert(
+					"Uh-Oh! It seems like the scene you're reading for was edited. Please reload this link after your counterpart is done editing."
+				);
+				return false;
+			}
+
+			// Check if any line timestamps changed
 			if (!timestampsEqual(lineTimestampsSnapshot, data.lineUpdatedAt)) {
 				setSceneOutOfDate(true);
 				alert(
-					"Uh-Oh! It seems like the scene you're reading for was edited. Please reload this link after your actor finalizes their changes."
+					"Uh-Oh! It seems like the scene you're reading for was edited. Please reload this link after your counterpart is done editing."
 				);
 				return false;
 			}
@@ -134,12 +179,20 @@ export default function ShareClient({
 	};
 
 	const startRecording = async (reader: ReaderLine) => {
+		// If the scene is no longer sharable, prevent recording
+		if (sceneNoLongerSharable) {
+			alert(
+				"Uh-Oh! This scene is no longer being shared. The scene owner has disabled sharing. Please reload the page or contact them for a new link."
+			);
+			return;
+		}
+
 		// If the scene has been edited while the guest is recording, prevent further
 		// recording until they reload to see the latest version.
 		if (sceneOutOfDate) {
 			alert(
 				"Uh-Oh! It seems like the scene you're reading for is actively being edited. " +
-					'Please reload the page after your actor finalizes their changes.'
+					'Please reload the page after your counterpart is done editing.'
 			);
 			return;
 		}
@@ -224,10 +277,17 @@ export default function ShareClient({
 	};
 
 	const markDone = async () => {
+		if (sceneNoLongerSharable) {
+			alert(
+				"Uh-Oh! This scene is no longer being shared. The scene owner has disabled sharing. Please reload the page or contact them for a new link."
+			);
+			return;
+		}
+
 		if (sceneOutOfDate) {
 			alert(
 				"Uh-Oh! It seems like the scene you're reading for is actively being edited. " +
-					'Please reload the page after your actor finalizes their changes before submitting.'
+					'Please reload the page after your counterpart is done editing before submitting.'
 			);
 			return;
 		}
@@ -256,13 +316,21 @@ export default function ShareClient({
 				body: JSON.stringify({
 					sessionId: session.id,
 					lineTimestamps: lineTimestampsSnapshot,
+					sceneUpdatedAt: sceneUpdatedAtSnapshot,
 					updates
 				})
 			});
 
 			if (!commitRes.ok) {
 				const body = await commitRes.json().catch(() => ({}));
-				if (commitRes.status === 409) {
+				if (commitRes.status === 403 && body?.notSharable) {
+					setSceneNoLongerSharable(true);
+					setSceneOutOfDate(true);
+					alert(
+						body?.error ??
+							"Uh-Oh! This scene is no longer being shared. The scene owner has disabled sharing."
+					);
+				} else if (commitRes.status === 409) {
 					setSceneOutOfDate(true);
 					alert(
 						body?.error ??
@@ -308,6 +376,45 @@ export default function ShareClient({
 			<p style={{ fontFamily: 'var(--font-sans)', marginTop: 4, color: '#3B2F2F' }}>
 				Status: <strong>{session.status === 'completed' ? 'Completed' : 'Pending'}</strong>
 			</p>
+
+			{/* Warning banner when scene is blocked */}
+			{sceneNoLongerSharable && (
+				<div
+					style={{
+						marginTop: 16,
+						padding: '12px 16px',
+						backgroundColor: '#fef2f2',
+						border: '1px solid #fecaca',
+						borderRadius: 8,
+						color: '#991b1b'
+					}}
+				>
+					<strong>Scene No Longer Shared</strong>
+					<p style={{ margin: '4px 0 0', fontSize: 14 }}>
+						The scene owner has disabled sharing. Please contact them for a new link or reload
+						once they re-enable sharing.
+					</p>
+				</div>
+			)}
+
+			{sceneOutOfDate && !sceneNoLongerSharable && (
+				<div
+					style={{
+						marginTop: 16,
+						padding: '12px 16px',
+						backgroundColor: '#fffbeb',
+						border: '1px solid #fcd34d',
+						borderRadius: 8,
+						color: '#92400e'
+					}}
+				>
+					<strong>Scene Has Been Edited</strong>
+					<p style={{ margin: '4px 0 0', fontSize: 14 }}>
+						The scene you&apos;re reading for was edited. Please reload this page after your
+						Counterpart is done editing.
+					</p>
+				</div>
+			)}
 
 			<ul style={{ listStyle: 'none', padding: 0, marginTop: 16 }}>
 				{items.map((item) => {
@@ -468,20 +575,26 @@ export default function ShareClient({
 			<div style={{ position: 'sticky', bottom: 0, background: '#fff', paddingTop: 8 }}>
 				<button
 					onClick={markDone}
-					disabled={sceneOutOfDate || !allRecorded}
+					disabled={sceneOutOfDate || sceneNoLongerSharable || !allRecorded}
 					style={{
 						width: '100%',
 						padding: '12px 16px',
 						borderRadius: 10,
 						border: 'none',
-						cursor: allRecorded ? 'pointer' : 'not-allowed',
-						background: '#3D5A80',
+						cursor: allRecorded && !sceneOutOfDate && !sceneNoLongerSharable ? 'pointer' : 'not-allowed',
+						background: sceneOutOfDate || sceneNoLongerSharable ? '#9ca3af' : '#3D5A80',
 						color: '#ffffff',
 						fontWeight: 700,
 						fontSize: 16
 					}}
 				>
-					{allRecorded ? 'Submit Lines' : 'Record all reader lines to submit'}
+					{sceneNoLongerSharable
+						? 'Scene no longer shared'
+						: sceneOutOfDate
+						? 'Please reload the page'
+						: allRecorded
+						? 'Submit Lines'
+						: 'Record all reader lines to submit'}
 				</button>
 			</div>
 		</div>

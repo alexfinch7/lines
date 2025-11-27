@@ -17,6 +17,17 @@ export default async function SharePage({ params }: Props) {
 	});
 
 	if (!res.ok) {
+		const errorBody = await res.json().catch(() => ({}));
+		// If scene is no longer sharable, show a specific message
+		if (errorBody?.notSharable) {
+			return (
+				<main style={{ padding: 24 }}>
+					<h1>Scene Not Available</h1>
+					<p>This scene is no longer being shared. Please contact the scene owner.</p>
+					<Link href="/">Back home</Link>
+				</main>
+			);
+		}
 		return (
 			<main style={{ padding: 24 }}>
 				<h1>Session not found</h1>
@@ -26,10 +37,12 @@ export default async function SharePage({ params }: Props) {
 		);
 	}
 
-	const { session, sceneVersion, lineUpdatedAt } = (await res.json()) as {
+	const { session, sceneVersion, lineUpdatedAt, sceneUpdatedAt, sceneSharable } = (await res.json()) as {
 		session: ShareSession;
 		sceneVersion?: string;
 		lineUpdatedAt?: Record<string, string>;
+		sceneUpdatedAt?: string;
+		sceneSharable?: boolean;
 	};
 
 	return (
@@ -38,6 +51,8 @@ export default async function SharePage({ params }: Props) {
 				initialSession={session}
 				initialSceneVersion={sceneVersion}
 				initialLineUpdatedAt={lineUpdatedAt}
+				initialSceneUpdatedAt={sceneUpdatedAt}
+				initialSceneSharable={sceneSharable}
 			/>
 		</main>
 	);

@@ -92,6 +92,34 @@ export async function GET(request: Request) {
 
 	const baseSession = data as ShareSession & { scene_id: string };
 
+	// 1b) Check if the scene is sharable and get the scene's updated_at timestamp
+	const { data: sceneData, error: sceneError } = await supabaseAdmin
+		.from('scripts')
+		.select('sharable, updated_at')
+		.eq('id', baseSession.scene_id)
+		.single();
+
+	if (sceneError || !sceneData) {
+		console.error('Failed to load scene for share session', {
+			sceneId: baseSession.scene_id,
+			error: sceneError
+		});
+		return NextResponse.json(
+			{ error: 'Failed to load scene from backend' },
+			{ status: 500 }
+		);
+	}
+
+	const sceneSharable = sceneData.sharable as boolean;
+	const sceneUpdatedAt = sceneData.updated_at as string | null;
+
+	if (!sceneSharable) {
+		return NextResponse.json(
+			{ error: 'This scene is no longer shared. Please contact the scene owner.', notSharable: true },
+			{ status: 403 }
+		);
+	}
+
 	// 2) Always hydrate actor/reader line text, ordering, and default audio from the
 	// canonical Supabase `lines` table for this scene. We no longer trust any client-
 	// provided scene layout stored on the share session, only per-session recordings.
@@ -194,7 +222,13 @@ export async function GET(request: Request) {
 			)
 			.digest('hex');
 
-		return NextResponse.json({ session: hydratedSession, sceneVersion, lineUpdatedAt });
+		return NextResponse.json({
+			session: hydratedSession,
+			sceneVersion,
+			lineUpdatedAt,
+			sceneUpdatedAt,
+			sceneSharable
+		});
 	}
 
 	// If we couldn't load canonical lines for this scene, fail fast instead of
