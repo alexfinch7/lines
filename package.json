@@ -9,8 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@mistralai/mistralai": "^1.5.0",
     "@elevenlabs/elevenlabs-js": "*",
+    "@mistralai/mistralai": "^1.5.0",
     "@supabase/ssr": "^0.7.0",
     "@supabase/supabase-js": "^2.81.1",
     "lucide-react": "^0.554.0",
@@ -20,6 +20,7 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "recharts": "^2.13.0",
+    "recordrtc": "^5.6.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {
@@ -27,6 +28,7 @@
     "@types/pdf-parse": "^1.1.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/recordrtc": "^5.6.15",
     "eslint": "^9",
     "eslint-config-next": "16.0.3",
     "typescript": "^5"

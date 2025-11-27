@@ -139,7 +139,7 @@ export async function POST(request: Request) {
 			}
 
 			// Download the recording from reader-recordings bucket
-			// The URL is like: https://xxx.supabase.co/storage/v1/object/public/reader-recordings/reader/{sessionId}/{lineId}.webm
+			// The URL is like: https://xxx.supabase.co/storage/v1/object/public/reader-recordings/reader/{sessionId}/{lineId}.wav
 			// Extract the path from the URL
 			const url = new URL(update.audioUrl);
 			const pathMatch = url.pathname.match(/\/storage\/v1\/object\/public\/reader-recordings\/(.+)$/);
@@ -168,15 +168,15 @@ export async function POST(request: Request) {
 				);
 			}
 
-			// Upload to lines bucket with structure: {user_id}/{script_id}/{line_id}.webm
-			const destPath = `${sceneOwnerId}/${sceneId}/${update.lineId}.webm`;
+			// Upload to lines bucket with structure: {user_id}/{script_id}/{line_id}.wav
+			const destPath = `${sceneOwnerId}/${sceneId}/${update.lineId}.wav`;
 			const arrayBuffer = await fileData.arrayBuffer();
 			const buffer = Buffer.from(arrayBuffer);
 
 			const { error: uploadError } = await supabaseAdmin.storage
 				.from('lines')
 				.upload(destPath, buffer, {
-					contentType: 'audio/webm',
+					contentType: 'audio/wav',
 					upsert: true
 				});
 

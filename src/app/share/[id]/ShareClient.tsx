@@ -1,9 +1,12 @@
 'use client';
 
 // src/app/share/[id]/ShareClient.tsx
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Mic, Square, Volume2, Check } from 'lucide-react';
 import type { ShareSession, ActorLine, ReaderLine } from '@/types/share';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type RecordRTCType = any;
 
 type Props = {
 	initialSession: ShareSession;
@@ -31,9 +34,19 @@ export default function ShareClient({
 	);
 	const [sceneUpdatedAtSnapshot] = useState<string | undefined>(initialSceneUpdatedAt);
 
-	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+	// RecordRTC refs - using any to avoid SSR issues with the library
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const recorderRef = useRef<any>(null);
 	const streamRef = useRef<MediaStream | null>(null);
-	const chunksRef = useRef<Blob[]>([]);
+	const RecordRTCRef = useRef<RecordRTCType>(null);
+	const currentLineIdRef = useRef<string | null>(null);
+
+	// Dynamically import RecordRTC on client-side only
+	useEffect(() => {
+		import('recordrtc').then((module) => {
+			RecordRTCRef.current = module.default;
+		});
+	}, []);
 
 	const actorLines = useMemo(() => session.actor_lines || [], [session.actor_lines]);
 	const readerLines = useMemo(() => session.reader_lines || [], [session.reader_lines]);
@@ -200,6 +213,12 @@ export default function ShareClient({
 		// Prevent starting a new recording while one is in progress
 		if (activeRecordingLineId) return;
 
+		// Ensure RecordRTC is loaded
+		if (!RecordRTCRef.current) {
+			alert('Recording library is still loading. Please try again.');
+			return;
+		}
+
 		// Each time before starting a new recording, verify that none of the scene's
 		// lines have been edited in Supabase since the guest loaded this page.
 		const fresh = await verifySceneFreshnessOrBlock();
@@ -212,24 +231,24 @@ export default function ShareClient({
 				stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 				streamRef.current = stream;
 			}
-			const recorder = new MediaRecorder(stream);
-			mediaRecorderRef.current = recorder;
-			chunksRef.current = [];
 
-			recorder.ondataavailable = (event) => {
-				if (event.data.size > 0) {
-					chunksRef.current.push(event.data);
-				}
-			};
+			// Store the line ID so we know which line this recording is for
+			currentLineIdRef.current = reader.lineId;
 
-			recorder.onstop = async () => {
-				const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-				await uploadRecording(blob, reader.lineId);
-				// Keep the stream alive for subsequent recordings; only clear UI state here.
-				setActiveRecordingLineId(null);
-			};
+			// Create RecordRTC instance with WAV format for cross-browser compatibility
+			// including iOS Safari
+			const RecordRTC = RecordRTCRef.current;
+			const recorder = new RecordRTC(stream, {
+				type: 'audio',
+				mimeType: 'audio/wav',
+				recorderType: RecordRTC.StereoAudioRecorder,
+				numberOfAudioChannels: 1,
+				desiredSampRate: 44100,
+				disableLogs: true
+			});
 
-			recorder.start();
+			recorderRef.current = recorder;
+			recorder.startRecording();
 			setActiveRecordingLineId(reader.lineId);
 		} catch (e) {
 			console.error('Failed to start recording', e);
@@ -237,19 +256,30 @@ export default function ShareClient({
 		}
 	};
 
-	const stopRecording = () => {
-		const recorder = mediaRecorderRef.current;
-		if (recorder && recorder.state === 'recording') {
-			// Clear UI state immediately so the button responds instantly
-			setActiveRecordingLineId(null);
-			recorder.stop();
-		}
+	const stopRecording = async () => {
+		const recorder = recorderRef.current;
+		const lineId = currentLineIdRef.current;
+
+		if (!recorder || !lineId) return;
+
+		// Clear UI state immediately so the button responds instantly
+		setActiveRecordingLineId(null);
+
+		// Stop recording and get the blob
+		recorder.stopRecording(async () => {
+			const blob = recorder.getBlob();
+			await uploadRecording(blob, lineId);
+			// Keep the stream alive for subsequent recordings; destroy only the recorder
+			recorder.destroy();
+			recorderRef.current = null;
+			currentLineIdRef.current = null;
+		});
 	};
 
 	const uploadRecording = async (blob: Blob, lineId: string) => {
 		if (!session.id) return;
 		const formData = new FormData();
-		formData.append('file', blob, `${lineId}.webm`);
+		formData.append('file', blob, `${lineId}.wav`);
 		formData.append('sessionId', session.id);
 		formData.append('lineId', lineId);
 		formData.append('role', 'reader');

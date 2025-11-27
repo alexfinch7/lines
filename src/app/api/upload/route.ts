@@ -22,14 +22,14 @@ export async function POST(request: Request) {
 		const arrayBuffer = await file.arrayBuffer();
 		const buffer = Buffer.from(arrayBuffer);
 
-		const ext = 'webm';
+		const ext = 'wav';
 		const prefix = role === 'actor' ? 'actor' : 'reader';
 		const path = `${prefix}/${sessionId}/${lineId}.${ext}`;
 
 		const { error: uploadError } = await supabaseAdmin.storage
 			.from('reader-recordings')
 			.upload(path, buffer, {
-				contentType: file.type || 'audio/webm',
+				contentType: file.type || 'audio/wav',
 				upsert: true
 			});
 
