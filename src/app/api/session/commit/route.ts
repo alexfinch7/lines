@@ -224,12 +224,13 @@ export async function POST(request: Request) {
 			}
 		}
 
-		// 5) Update the scene's updated_at and set sharable to false
+		// 5) Update the scene's updated_at, set sharable to false, and need_trim to true
 		const { error: sceneUpdateError } = await supabaseAdmin
 			.from('scripts')
 			.update({
 				updated_at: newUpdatedAt,
-				sharable: false
+				sharable: false,
+				need_trim: true
 			})
 			.eq('id', sceneId);
 

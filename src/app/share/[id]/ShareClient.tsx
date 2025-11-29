@@ -86,11 +86,6 @@ export default function ShareClient({
 		return `${url}${sep}t=${Date.now()}`;
 	};
 
-	const handlePlayActor = async (actor?: ActorLine) => {
-		if (!actor || !actor.audioUrl) return;
-		await playAudio(withCacheBust(actor.audioUrl), actor.lineId);
-	};
-
 	const timestampsEqual = (
 		initial?: Record<string, string>,
 		latest?: Record<string, string>
@@ -453,7 +448,6 @@ export default function ShareClient({
 					const isActor = item.kind === 'actor';
 					const isRecording = isReader && activeRecordingLineId === item.line.lineId;
 					const hasRecording = isReader && !!(item.line as ReaderLine).audioUrl;
-					const isPlaying = isActor && playingLineId === item.line.lineId;
 					return (
 						<li
 							key={key}
@@ -540,30 +534,7 @@ export default function ShareClient({
 												</>
 											)}
 										</>
-									) : (
-										<button
-											onClick={() => handlePlayActor(item.line as ActorLine)}
-											disabled={!(item.line as ActorLine).audioUrl}
-											style={{
-												padding: '10px 12px',
-												borderRadius: 999,
-												border: '1px solid #ddd',
-												background: '#f5f5f5',
-												color: '#3B2F2F',
-												cursor: (item.line as ActorLine).audioUrl
-													? 'pointer'
-													: 'not-allowed',
-												minWidth: 44,
-												display: 'inline-flex',
-												alignItems: 'center',
-												justifyContent: 'center',
-												opacity: (item.line as ActorLine).audioUrl ? 1 : 0.5
-											}}
-											aria-label="Play actor line"
-										>
-											<Volume2 size={18} />
-										</button>
-									)}
+									) : null}
 								</div>
 							</div>
 							{/* Line text (highlight reader only as selection/marker style) */}
