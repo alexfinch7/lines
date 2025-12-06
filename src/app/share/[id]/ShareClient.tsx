@@ -2,7 +2,7 @@
 
 // src/app/share/[id]/ShareClient.tsx
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Mic, Square, Volume2, Check, Loader2 } from 'lucide-react';
+import { Mic, Square, Volume2, Check, Loader2, CheckCircle2, X } from 'lucide-react';
 import type { ShareSession, ActorLine, ReaderLine } from '@/types/share';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -30,6 +30,7 @@ export default function ShareClient({
 	const [activeRecordingLineId, setActiveRecordingLineId] = useState<string | null>(null);
 	const [playingLineId, setPlayingLineId] = useState<string | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
+	const [showSuccessDialog, setShowSuccessDialog] = useState(false);
 	const [lineTimestampsSnapshot] = useState<Record<string, string> | undefined>(
 		initialLineUpdatedAt
 	);
@@ -392,10 +393,11 @@ export default function ShareClient({
 			// Upload all recordings now
 			const uploadedUrls = await uploadAllRecordings();
 
-			// Build updates with the uploaded URLs
+			// Build updates with the uploaded URLs and generate new recording IDs
 			const updates = Object.entries(uploadedUrls).map(([lineId, audioUrl]) => ({
 				lineId,
-				audioUrl
+				audioUrl,
+				recordingId: crypto.randomUUID()
 			}));
 
 			if (updates.length === 0) {
@@ -457,6 +459,7 @@ export default function ShareClient({
 		}
 		setSession((prev) => ({ ...prev, status: 'completed' }));
 		setIsSubmitting(false);
+		setShowSuccessDialog(true);
 	};
 
 	// Check if all reader lines have recordings (either local or from server)
@@ -692,6 +695,110 @@ export default function ShareClient({
 						: 'Record all reader lines to submit'}
 				</button>
 			</div>
+
+			{/* Success Dialog */}
+			{showSuccessDialog && (
+				<div
+					style={{
+						position: 'fixed',
+						inset: 0,
+						backgroundColor: 'rgba(0, 0, 0, 0.5)',
+						display: 'flex',
+						alignItems: 'center',
+						justifyContent: 'center',
+						zIndex: 1000,
+						padding: 16
+					}}
+					onClick={() => setShowSuccessDialog(false)}
+				>
+					<div
+						style={{
+							backgroundColor: '#fff',
+							borderRadius: 16,
+							padding: 32,
+							maxWidth: 400,
+							width: '100%',
+							textAlign: 'center',
+							boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+							position: 'relative'
+						}}
+						onClick={(e) => e.stopPropagation()}
+					>
+						<button
+							onClick={() => setShowSuccessDialog(false)}
+							style={{
+								position: 'absolute',
+								top: 12,
+								right: 12,
+								background: 'none',
+								border: 'none',
+								cursor: 'pointer',
+								padding: 4,
+								color: '#9ca3af'
+							}}
+							aria-label="Close"
+						>
+							<X size={20} />
+						</button>
+
+						<div
+							style={{
+								width: 64,
+								height: 64,
+								borderRadius: '50%',
+								backgroundColor: '#d1fae5',
+								display: 'flex',
+								alignItems: 'center',
+								justifyContent: 'center',
+								margin: '0 auto 16px'
+							}}
+						>
+							<CheckCircle2 size={32} color="#059669" />
+						</div>
+
+						<h2
+							style={{
+								fontFamily: 'var(--font-display)',
+								fontSize: 24,
+								fontWeight: 700,
+								color: '#3B2F2F',
+								marginBottom: 8
+							}}
+						>
+							Lines Submitted!
+						</h2>
+
+						<p
+							style={{
+								fontFamily: 'var(--font-sans)',
+								fontSize: 16,
+								color: '#6b7280',
+								marginBottom: 24,
+								lineHeight: 1.5
+							}}
+						>
+							Your recordings have been sent successfully. The scene owner will be notified and can now review your lines.
+						</p>
+
+						<button
+							onClick={() => setShowSuccessDialog(false)}
+							style={{
+								width: '100%',
+								padding: '12px 24px',
+								borderRadius: 10,
+								border: 'none',
+								backgroundColor: '#3D5A80',
+								color: '#fff',
+								fontWeight: 600,
+								fontSize: 16,
+								cursor: 'pointer'
+							}}
+						>
+							Done
+						</button>
+					</div>
+				</div>
+			)}
 
 			<style jsx>{`
 				@keyframes spin {

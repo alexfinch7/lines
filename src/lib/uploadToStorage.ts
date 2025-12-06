@@ -1,13 +1,13 @@
 import { supabaseAdmin } from '@/lib/supabaseServer';
 
-const PDF_BUCKET = 'reader-recordings';
+const TEMP_BUCKET = 'reader-recordings';
 const PDF_PREFIX = 'sides';
 
 /**
  * Upload the given PDF file to Supabase Storage and return a public URL
- * that Mistral can fetch.
+ * that Mistral can fetch, along with the storage path for later cleanup.
  */
-export async function uploadToStorageAndGetUrl(file: File): Promise<string> {
+export async function uploadToStorageAndGetUrl(file: File): Promise<{ url: string; path: string }> {
 	const arrayBuffer = await file.arrayBuffer();
 	const buffer = Buffer.from(arrayBuffer);
 
@@ -16,7 +16,7 @@ export async function uploadToStorageAndGetUrl(file: File): Promise<string> {
 	const timestamp = Date.now();
 	const path = `${PDF_PREFIX}/${timestamp}-${safeName}.${ext}`;
 
-	const { error: uploadError } = await supabaseAdmin.storage.from(PDF_BUCKET).upload(path, buffer, {
+	const { error: uploadError } = await supabaseAdmin.storage.from(TEMP_BUCKET).upload(path, buffer, {
 		contentType: file.type || 'application/pdf',
 		upsert: true
 	});
@@ -28,9 +28,30 @@ export async function uploadToStorageAndGetUrl(file: File): Promise<string> {
 
 	const {
 		data: { publicUrl }
-	} = supabaseAdmin.storage.from(PDF_BUCKET).getPublicUrl(path);
+	} = supabaseAdmin.storage.from(TEMP_BUCKET).getPublicUrl(path);
 
-	return publicUrl;
+	return { url: publicUrl, path };
+}
+
+/**
+ * Delete a file from the reader-recordings bucket.
+ */
+export async function deleteFromTempStorage(path: string): Promise<void> {
+	const { error } = await supabaseAdmin.storage.from(TEMP_BUCKET).remove([path]);
+	if (error) {
+		console.error('Failed to delete from temp storage:', { path, error });
+	}
+}
+
+/**
+ * Delete multiple files from the reader-recordings bucket.
+ */
+export async function deleteMultipleFromTempStorage(paths: string[]): Promise<void> {
+	if (paths.length === 0) return;
+	const { error } = await supabaseAdmin.storage.from(TEMP_BUCKET).remove(paths);
+	if (error) {
+		console.error('Failed to delete files from temp storage:', { paths, error });
+	}
 }
 
 

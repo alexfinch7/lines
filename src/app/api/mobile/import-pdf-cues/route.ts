@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { extractDialogueFromPdf } from '@/lib/extractDialogue';
-import { uploadToStorageAndGetUrl } from '@/lib/uploadToStorage';
+import { uploadToStorageAndGetUrl, deleteFromTempStorage } from '@/lib/uploadToStorage';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -9,6 +9,8 @@ type Cue = ['myself' | 'reader', string];
 type ParsedLines = { lines: Cue[] };
 
 export async function POST(request: Request) {
+	let pdfPath: string | null = null;
+
 	try {
 		const formData = await request.formData();
 		const file = formData.get('file') as File | null;
@@ -34,7 +36,8 @@ export async function POST(request: Request) {
 		}
 
 		// 1) Upload PDF to storage and obtain a public URL that Mistral can fetch
-		const pdfUrl = await uploadToStorageAndGetUrl(file);
+		const { url: pdfUrl, path } = await uploadToStorageAndGetUrl(file);
+		pdfPath = path;
 
 		// 2) Use Mistral OCR + document annotations to extract structured dialogue
 		const dialogueDoc = await extractDialogueFromPdf({ pdfUrl, characterName });
@@ -58,9 +61,18 @@ export async function POST(request: Request) {
 			JSON.stringify(responseBody, null, 2)
 		);
 
+		// Clean up the temporary PDF after successful processing
+		await deleteFromTempStorage(pdfPath);
+
 		return NextResponse.json(responseBody);
 	} catch (error: any) {
 		console.error('Unexpected error in import-pdf-cues', error);
+
+		// Attempt cleanup even on error
+		if (pdfPath) {
+			await deleteFromTempStorage(pdfPath).catch(() => {});
+		}
+
 		return NextResponse.json(
 			{ error: error?.message || 'Internal server error' },
 			{ status: 500 }

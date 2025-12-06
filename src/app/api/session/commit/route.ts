@@ -1,12 +1,13 @@
 // src/app/api/session/commit/route.ts
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { deleteMultipleFromTempStorage } from '@/lib/uploadToStorage';
 
 type CommitBody = {
 	sessionId?: string;
 	lineTimestamps?: Record<string, string>;
 	sceneUpdatedAt?: string;
-	updates?: { lineId: string; audioUrl: string }[];
+	updates?: { lineId: string; audioUrl: string; recordingId: string }[];
 };
 
 export async function POST(request: Request) {
@@ -128,6 +129,7 @@ export async function POST(request: Request) {
 
 		// 4) Upload recordings from reader-recordings to lines bucket and update DB
 		const newUpdatedAt = new Date().toISOString();
+		const tempPathsToDelete: string[] = [];
 
 		for (const update of updates) {
 			const lastKnown = lineTimestamps[update.lineId];
@@ -168,6 +170,9 @@ export async function POST(request: Request) {
 				);
 			}
 
+			// Track path for cleanup after successful commit
+			tempPathsToDelete.push(sourcePath);
+
 			// Upload to lines bucket with structure: {user_id}/{script_id}/{line_id}.wav
 			const destPath = `${sceneOwnerId}/${sceneId}/${update.lineId}.wav`;
 			const arrayBuffer = await fileData.arrayBuffer();
@@ -196,11 +201,12 @@ export async function POST(request: Request) {
 				.from('lines')
 				.getPublicUrl(destPath);
 
-			// Update the line in the database with new audio URL and timestamp
+			// Update the line in the database with new audio URL, recording ID, and timestamp
 			const { error: updateError, data } = await supabaseAdmin
 				.from('lines')
 				.update({
 					audio_url: publicUrl,
+					recording_id: update.recordingId,
 					updated_at: newUpdatedAt
 				})
 				.eq('id', update.lineId)
@@ -240,6 +246,11 @@ export async function POST(request: Request) {
 				{ error: 'Failed to update scene' },
 				{ status: 500 }
 			);
+		}
+
+		// 6) Clean up temporary recordings from reader-recordings bucket
+		if (tempPathsToDelete.length > 0) {
+			await deleteMultipleFromTempStorage(tempPathsToDelete);
 		}
 
 		return NextResponse.json({ ok: true });
