@@ -4,15 +4,20 @@ const TEMP_BUCKET = 'reader-recordings';
 const PDF_PREFIX = 'sides';
 
 /**
- * Upload the given PDF file to Supabase Storage and return a public URL
+ * Upload the given file (PDF or Image) to Supabase Storage and return a public URL
  * that Mistral can fetch, along with the storage path for later cleanup.
  */
 export async function uploadToStorageAndGetUrl(file: File): Promise<{ url: string; path: string }> {
 	const arrayBuffer = await file.arrayBuffer();
 	const buffer = Buffer.from(arrayBuffer);
 
-	const ext = 'pdf';
-	const safeName = (file.name || 'sides.pdf').replace(/[^a-zA-Z0-9_.-]/g, '_');
+	// Determine extension from file type, default to pdf
+	let ext = 'pdf';
+	if (file.type.includes('image/png')) ext = 'png';
+	else if (file.type.includes('image/jpeg')) ext = 'jpg';
+	else if (file.type.includes('image/webp')) ext = 'webp';
+
+	const safeName = (file.name || `file.${ext}`).replace(/[^a-zA-Z0-9_.-]/g, '_');
 	const timestamp = Date.now();
 	const path = `${PDF_PREFIX}/${timestamp}-${safeName}.${ext}`;
 

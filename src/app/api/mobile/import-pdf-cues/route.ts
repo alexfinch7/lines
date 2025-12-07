@@ -1,32 +1,26 @@
 import { NextResponse } from 'next/server';
-import { extractDialogueFromPdf } from '@/lib/extractDialogue';
-import { uploadToStorageAndGetUrl, deleteFromTempStorage } from '@/lib/uploadToStorage';
+import { extractDialogueFromImage } from '@/lib/extractDialogue';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 60; // Increase if processing many pages
 
 type Cue = ['myself' | 'reader', string];
 type ParsedLines = { lines: Cue[] };
 
+type ImportBody = {
+	imageUrls: string[];
+	title?: string;
+	characterName: string;
+};
+
 export async function POST(request: Request) {
-	let pdfPath: string | null = null;
-
 	try {
-		const formData = await request.formData();
-		const file = formData.get('file') as File | null;
-		const characterName = (formData.get('characterName') as string | null)?.trim();
+		const body = (await request.json().catch(() => ({}))) as ImportBody;
+		const { imageUrls, characterName } = body;
 
-		if (!file || !characterName) {
+		if (!imageUrls || !Array.isArray(imageUrls) || imageUrls.length === 0 || !characterName) {
 			return NextResponse.json(
-				{ error: 'Missing file or characterName' },
-				{ status: 400 }
-			);
-		}
-
-		// Optional soft check: if a type is provided and it's clearly not a PDF, reject.
-		if (file.type && !file.type.toLowerCase().includes('pdf')) {
-			return NextResponse.json(
-				{ error: `Unexpected file type: ${file.type}` },
+				{ error: 'imageUrls array and characterName are required' },
 				{ status: 400 }
 			);
 		}
@@ -35,44 +29,47 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Missing MISTRAL_API_KEY' }, { status: 500 });
 		}
 
-		// 1) Upload PDF to storage and obtain a public URL that Mistral can fetch
-		const { url: pdfUrl, path } = await uploadToStorageAndGetUrl(file);
-		pdfPath = path;
+		console.log(`Processing ${imageUrls.length} pages for character: ${characterName}`);
 
-		// 2) Use Mistral OCR + document annotations to extract structured dialogue
-		const dialogueDoc = await extractDialogueFromPdf({ pdfUrl, characterName });
+		const target = characterName.trim().toUpperCase();
+		const allLines: Cue[] = [];
 
-		const target = characterName.toUpperCase();
+		// Process pages sequentially to maintain order and avoid rate limits
+		// Parallel processing is faster but might hit Mistral rate limits depending on your tier
+		for (const url of imageUrls) {
+			try {
+				const dialogueDoc = await extractDialogueFromImage({
+					imageUrl: url,
+					characterName: target // Pass for context if needed, though extraction logic filters later
+				});
 
-		const lines: Cue[] = dialogueDoc.lines.map((line) => {
-			const normalizedSpeaker = line.speaker.trim().toUpperCase();
+				// Convert page lines to Cue format
+				const pageLines: Cue[] = dialogueDoc.lines.map((line) => {
+					const normalizedSpeaker = line.speaker.trim().toUpperCase();
+					const role: 'myself' | 'reader' = normalizedSpeaker.includes(target)
+						? 'myself'
+						: 'reader';
+					return [role, line.text];
+				});
 
-			const role: 'myself' | 'reader' = normalizedSpeaker.includes(target)
-				? 'myself'
-				: 'reader';
+				allLines.push(...pageLines);
+			} catch (pageError) {
+				console.error(`Failed to process page ${url}:`, pageError);
+				// Continue with other pages? Or fail? 
+				// For now, we continue and log the error.
+			}
+		}
 
-			return [role, line.text];
-		});
-
-		const responseBody: ParsedLines = { lines };
+		const responseBody: ParsedLines = { lines: allLines };
 
 		console.log(
-			'Sending import-pdf-cues response to client (Mistral annotations):',
-			JSON.stringify(responseBody, null, 2)
+			'Sending import response to client:',
+			JSON.stringify({ lineCount: allLines.length }, null, 2)
 		);
-
-		// Clean up the temporary PDF after successful processing
-		await deleteFromTempStorage(pdfPath);
 
 		return NextResponse.json(responseBody);
 	} catch (error: any) {
 		console.error('Unexpected error in import-pdf-cues', error);
-
-		// Attempt cleanup even on error
-		if (pdfPath) {
-			await deleteFromTempStorage(pdfPath).catch(() => {});
-		}
-
 		return NextResponse.json(
 			{ error: error?.message || 'Internal server error' },
 			{ status: 500 }
