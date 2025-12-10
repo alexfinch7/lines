@@ -1,77 +1,72 @@
 'use client';
 
-import { useState } from 'react';
+import Link from 'next/link';
+import TextType from '../components/TextType';
 
 export default function Home() {
-	const [shareUrl, setShareUrl] = useState<string | null>(null);
-	const [loading, setLoading] = useState(false);
+  return (
+    <main
+      style={{
+        width: '100vw',
+        height: '100vh',
+        backgroundColor: '#F8F5F2',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        flexDirection: 'column',
+        fontFamily: 'var(--font-display)',
+        color: '#3B2F2F',
+        overflow: 'hidden',
+        position: 'relative',
+      }}
+    >
+      <Link
+        href="/dashboard"
+        style={{
+          position: 'absolute',
+          top: '24px',
+          right: '24px',
+          padding: '10px 20px',
+          backgroundColor: '#3B2F2F',
+          color: '#F8F5F2',
+          borderRadius: '30px',
+          fontSize: '1rem',
+          fontWeight: 500,
+          fontFamily: 'var(--font-sans)',
+          textDecoration: 'none',
+          transition: 'transform 0.2s ease',
+        }}
+      >
+        Dashboard
+      </Link>
+      <div style={{ position: 'relative', fontSize: '3rem', fontWeight: 600 }}>
+        {/* Ghost element to define centering based on "Your Counterpart" */}
+        <div style={{ visibility: 'hidden', whiteSpace: 'pre' }}>
+          Your Counterpart
+        </div>
 
-	const createDummy = async () => {
-		setLoading(true);
-		try {
-			const res = await fetch('/api/session', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					title: 'Dummy Scene from Web',
-					sceneId: 'local-demo-scene-1',
-					actorLines: [
-						{
-							lineId: 'line-1',
-							index: 0,
-							text: 'You never listen to me.',
-							audioUrl: 'https://example.com/audio/line-1.m4a'
-						}
-					],
-					readerLines: [
-						{
-							lineId: 'line-2',
-							index: 1,
-							text: 'I always listened. You just never talked.'
-						}
-					]
-				})
-			});
-			const data = await res.json();
-			setShareUrl(data.shareUrl);
-		} finally {
-			setLoading(false);
-		}
-	};
-
-	return (
-		<main style={{ padding: 24 }}>
-			<h1>Lines Share Demo</h1>
-			<button
-				disabled={loading}
-				onClick={createDummy}
-				style={{
-					padding: '10px 16px',
-					borderRadius: 8,
-					border: 'none',
-					cursor: 'pointer',
-					marginTop: 16
-				}}
-			>
-				{loading ? 'Creating…' : 'Create Dummy Share Link'}
-			</button>
-
-			{shareUrl && (
-				<div style={{ marginTop: 24 }}>
-					<p>Share this URL:</p>
-					<code
-						style={{
-							display: 'block',
-							padding: 8,
-							borderRadius: 6,
-							background: '#f5f5f5',
-							wordBreak: 'break-all'
-						}}
-					>
-						{shareUrl}
-					</code>
-				</div>
-			)}
-		</main>
-	);
+        {/* Actual content overlaid */}
+        <div style={{ position: 'absolute', top: 0, left: 0, whiteSpace: 'nowrap' }}>
+          <span>Your </span>
+          <TextType
+            text={[
+              "Counterpart",
+              "scene partner",
+              "reader",
+              "understudy",
+              "Counterpart",
+              "career tracker",
+              "camera man",
+              "practice space",
+            ]}
+            typingSpeed={75}
+            deletingSpeed={40}
+            pauseDuration={1500}
+            showCursor={true}
+            cursorCharacter="*"
+          />
+        </div>
+      </div>
+    </main>
+  );
 }

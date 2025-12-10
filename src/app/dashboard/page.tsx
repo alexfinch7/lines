@@ -298,7 +298,7 @@ export default function DashboardPage() {
                 color: 'var(--espresso)'
               }}
             >
-              Understudy - Studio
+              Counterpart - Studio
             </h1>
             <p
               style={{
