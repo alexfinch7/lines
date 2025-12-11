@@ -20,7 +20,7 @@ type TtsLineResponseBody =
 			error: string;
 	  };
 
-const MAX_TEXT_LENGTH = 500;
+const MAX_TEXT_LENGTH = 20000;
 
 export async function POST(request: Request) {
 	let body: Partial<TtsLineRequestBody>;
