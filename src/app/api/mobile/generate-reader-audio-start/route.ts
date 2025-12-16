@@ -180,13 +180,24 @@ export async function POST(request: Request) {
 		}
 
 		const readerLines = body.lines.filter(
-			(line): line is StartRequestBody['lines'][number] =>
-				Array.isArray(line) &&
-				line.length === 4 &&
-				line[1] === 'reader' &&
-				typeof line[0] === 'string' &&
-				typeof line[2] === 'string' &&
-				(line[3] === 'male_presenting' || line[3] === 'female_presenting')
+			(line): line is StartRequestBody['lines'][number] => {
+				const isValid =
+					Array.isArray(line) &&
+					line.length >= 4 &&
+					line[1] === 'reader' &&
+					typeof line[0] === 'string' &&
+					typeof line[2] === 'string' &&
+					(line[3] === 'male_presenting' || line[3] === 'female_presenting');
+
+				if (!isValid) {
+					console.warn('[reader-audio] Invalid line skipped:', {
+						line: Array.isArray(line)
+							? line.map((item, i) => (i === 2 && typeof item === 'string' ? item.slice(0, 20) + '...' : item))
+							: line
+					});
+				}
+				return isValid;
+			}
 		);
 
 		if (readerLines.length === 0) {

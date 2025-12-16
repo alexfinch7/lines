@@ -80,13 +80,14 @@ export async function GET(request: Request) {
 	}
 
 	// 1) Load the stored share session (includes scene_id and any existing audio URLs)
-	const { data, error } = await supabaseAnon
+	const { data, error } = await supabaseAdmin
 		.from('share_sessions')
 		.select('*')
 		.eq('id', id)
 		.single();
 
 	if (error || !data) {
+		console.error('Session not found via supabaseAdmin', { id, error });
 		return NextResponse.json({ error: 'Not found' }, { status: 404 });
 	}
 
