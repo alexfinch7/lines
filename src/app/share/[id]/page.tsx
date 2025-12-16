@@ -18,7 +18,11 @@ export default async function SharePage({ params }: Props) {
 
 	if (!res.ok) {
 		const errorBody = await res.json().catch(() => ({}));
-		console.error(`SharePage load error: status=${res.status}`, errorBody);
+		console.error(`SharePage load error: status=${res.status}`, {
+			url: res.url,
+			status: res.status,
+			errorBody
+		});
 
 		// If scene is no longer sharable, show a specific message
 		if (errorBody?.notSharable) {

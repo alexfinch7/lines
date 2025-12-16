@@ -85,7 +85,7 @@ export async function GET(request: Request) {
 	console.log('Fetching session:', { 
 		id, 
 		sbUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-		hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY 
+		hasServiceKey: !!(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)
 	});
 
 	// 1) Load the stored share session (includes scene_id and any existing audio URLs)
@@ -96,7 +96,12 @@ export async function GET(request: Request) {
 		.single();
 
 	if (error || !data) {
-		console.error('Session not found via supabaseAdmin', { id, error });
+		console.error('Session not found via supabaseAdmin', { 
+			id, 
+			error,
+			sbUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+			hasServiceKey: !!(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)
+		});
 		return NextResponse.json({ error: 'Not found' }, { status: 404 });
 	}
 
@@ -110,9 +115,23 @@ export async function GET(request: Request) {
 		.single();
 
 	if (sceneError || !sceneData) {
+		// Handle specific case of missing script
+		if (sceneError?.code === 'PGRST116') {
+			console.warn('Original script deleted for session', {
+				sessionId: id,
+				sceneId: baseSession.scene_id
+			});
+			return NextResponse.json(
+				{ error: 'The original scene for this session has been deleted.' },
+				{ status: 404 }
+			);
+		}
+
 		console.error('Failed to load scene for share session', {
+			sessionId: id,
 			sceneId: baseSession.scene_id,
-			error: sceneError
+			error: sceneError,
+			hasServiceKey: !!(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)
 		});
 		return NextResponse.json(
 			{ error: 'Failed to load scene from backend' },
