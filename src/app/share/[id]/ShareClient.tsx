@@ -57,14 +57,20 @@ export default function ShareClient({
 		});
 	}, []);
 
-	// Cleanup object URLs on unmount
+	// Keep a ref to the latest URLs for cleanup on unmount
+	const localPlaybackUrlsRef = useRef(localPlaybackUrls);
+	useEffect(() => {
+		localPlaybackUrlsRef.current = localPlaybackUrls;
+	}, [localPlaybackUrls]);
+
+	// Cleanup object URLs ONLY on unmount
 	useEffect(() => {
 		return () => {
-			Object.values(localPlaybackUrls).forEach((url) => {
+			Object.values(localPlaybackUrlsRef.current).forEach((url) => {
 				URL.revokeObjectURL(url);
 			});
 		};
-	}, [localPlaybackUrls]);
+	}, []);
 
 	// Initialize AudioContext on first user interaction (required for iOS)
 	const initAudioContext = useCallback(() => {

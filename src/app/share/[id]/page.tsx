@@ -17,7 +17,14 @@ export default async function SharePage({ params }: Props) {
 	});
 
 	if (!res.ok) {
-		const errorBody = await res.json().catch(() => ({}));
+		let errorBody: any = {};
+		try {
+			errorBody = await res.json();
+		} catch (e) {
+			const text = await res.text().catch(() => '');
+			errorBody = { error: 'Invalid JSON', raw: text.slice(0, 500) };
+		}
+
 		console.error(`SharePage load error: status=${res.status}`, {
 			url: res.url,
 			status: res.status,

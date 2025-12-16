@@ -73,6 +73,7 @@ export async function POST(request: Request) {
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+	console.log('API Session GET Hit', request.url);
 	// For convenience: /api/session?id=...
 	const { searchParams } = new URL(request.url);
 	const rawId = searchParams.get('id');
