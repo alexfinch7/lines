@@ -11,13 +11,15 @@ export default async function SharePage({ params }: Props) {
 	const { id } = await params;
 
 	const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-	const res = await fetch(`${baseUrl}/api/session?id=${id}`, {
+	const res = await fetch(`${baseUrl}/api/session?id=${id}&t=${Date.now()}`, {
 		// Always fetch fresh data so script edits are reflected immediately
 		cache: 'no-store'
 	});
 
 	if (!res.ok) {
 		const errorBody = await res.json().catch(() => ({}));
+		console.error(`SharePage load error: status=${res.status}`, errorBody);
+
 		// If scene is no longer sharable, show a specific message
 		if (errorBody?.notSharable) {
 			return (
@@ -28,11 +30,14 @@ export default async function SharePage({ params }: Props) {
 				</main>
 			);
 		}
+		
+		const isNotFound = res.status === 404;
 		return (
 			<main style={{ padding: 24 }}>
-				<h1>Session not found</h1>
-				<p>Check the link or ask your friend to resend it.</p>
-				<Link href="/">Back home</Link>
+				<h1>{isNotFound ? 'Session not found' : 'Something went wrong'}</h1>
+				<p>{errorBody?.error || 'Check the link or ask your friend to resend it.'}</p>
+				{!isNotFound && <p style={{ fontSize: '0.8rem', color: '#666', marginTop: 8 }}>Error code: {res.status}</p>}
+				<Link href="/" style={{ display: 'inline-block', marginTop: 16 }}>Back home</Link>
 			</main>
 		);
 	}

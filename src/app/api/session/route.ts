@@ -70,6 +70,8 @@ export async function POST(request: Request) {
 	}
 }
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
 	// For convenience: /api/session?id=...
 	const { searchParams } = new URL(request.url);
