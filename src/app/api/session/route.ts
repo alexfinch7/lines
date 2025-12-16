@@ -75,11 +75,18 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
 	// For convenience: /api/session?id=...
 	const { searchParams } = new URL(request.url);
-	const id = searchParams.get('id');
+	const rawId = searchParams.get('id');
+	const id = rawId?.trim();
 
 	if (!id) {
-	return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+		return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 	}
+
+	console.log('Fetching session:', { 
+		id, 
+		sbUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+		hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY 
+	});
 
 	// 1) Load the stored share session (includes scene_id and any existing audio URLs)
 	const { data, error } = await supabaseAdmin
