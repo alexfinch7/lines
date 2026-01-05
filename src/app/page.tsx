@@ -67,6 +67,27 @@ export default function Home() {
           />
         </div>
       </div>
+      <Link
+        href="/privacy"
+        style={{
+          position: 'absolute',
+          bottom: '24px',
+          fontSize: '0.75rem',
+          color: '#3B2F2F',
+          opacity: 0.6,
+          textDecoration: 'none',
+          fontFamily: 'var(--font-sans)',
+          transition: 'opacity 0.2s ease',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.opacity = '1';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.opacity = '0.6';
+        }}
+      >
+        Privacy Policy
+      </Link>
     </main>
   );
 }

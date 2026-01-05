@@ -1,11 +1,56 @@
 // src/app/share/[id]/page.tsx
 import Link from 'next/link';
+import type { Metadata } from 'next';
 import type { ShareSession } from '@/types/share';
 import ShareClient from './ShareClient';
 
 type Props = {
 	params: Promise<{ id: string }>;
 };
+
+async function getSessionData(id: string) {
+	const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+	const res = await fetch(`${baseUrl}/api/session?id=${id}&t=${Date.now()}`, {
+		cache: 'no-store'
+	});
+
+	if (!res.ok) {
+		return null;
+	}
+
+	const data = await res.json();
+	return data.session as ShareSession;
+}
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+	const { id } = await params;
+	const session = await getSessionData(id);
+
+	if (!session) {
+		return {
+			title: 'Counterpart',
+			description: 'Be my reader! Record lines and rehearse in Counterpart.',
+		};
+	}
+
+	const title = `${session.title} - Counterpart`;
+	const description = 'Be my reader! Record lines and rehearse in Counterpart.';
+
+	return {
+		title,
+		description,
+		openGraph: {
+			title,
+			description,
+			type: 'website',
+		},
+		twitter: {
+			card: 'summary',
+			title,
+			description,
+		},
+	};
+}
 
 export default async function SharePage({ params }: Props) {
 	const { id } = await params;
