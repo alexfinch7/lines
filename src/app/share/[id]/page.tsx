@@ -43,11 +43,15 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 			title,
 			description,
 			type: 'website',
+			images: [{
+				url: '/favicon.png', // Fallback image to ensure rich preview card appears
+			}],
 		},
 		twitter: {
 			card: 'summary',
 			title,
 			description,
+			images: ['/favicon.png'],
 		},
 	};
 }
