@@ -2,51 +2,25 @@
 
 import Link from 'next/link';
 import TextType from '../components/TextType';
+import styles from './page.module.css';
 
 export default function Home() {
   return (
-    <main
-      style={{
-        width: '100vw',
-        height: '100vh',
-        backgroundColor: '#F8F5F2',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        flexDirection: 'column',
-        fontFamily: 'var(--font-display)',
-        color: '#3B2F2F',
-        overflow: 'hidden',
-        position: 'relative',
-      }}
-    >
+    <main className={styles.container}>
       <Link
         href="/dashboard"
-        style={{
-          position: 'absolute',
-          top: '24px',
-          right: '24px',
-          padding: '10px 20px',
-          backgroundColor: '#3B2F2F',
-          color: '#F8F5F2',
-          borderRadius: '30px',
-          fontSize: '1rem',
-          fontWeight: 500,
-          fontFamily: 'var(--font-sans)',
-          textDecoration: 'none',
-          transition: 'transform 0.2s ease',
-        }}
+        className={styles.dashboardButton}
       >
         Dashboard
       </Link>
-      <div style={{ position: 'relative', fontSize: '3rem', fontWeight: 600 }}>
+      <div className={styles.centerTextContainer}>
         {/* Ghost element to define centering based on "Your Counterpart" */}
-        <div style={{ visibility: 'hidden', whiteSpace: 'pre' }}>
+        <div className={styles.ghostText}>
           Your Counterpart
         </div>
 
         {/* Actual content overlaid */}
-        <div style={{ position: 'absolute', top: 0, left: 0, whiteSpace: 'nowrap' }}>
+        <div className={styles.typingOverlay}>
           <span>Your </span>
           <TextType
             text={[
@@ -69,22 +43,7 @@ export default function Home() {
       </div>
       <Link
         href="/privacy"
-        style={{
-          position: 'absolute',
-          bottom: '24px',
-          fontSize: '0.75rem',
-          color: '#3B2F2F',
-          opacity: 0.6,
-          textDecoration: 'none',
-          fontFamily: 'var(--font-sans)',
-          transition: 'opacity 0.2s ease',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.opacity = '1';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.opacity = '0.6';
-        }}
+        className={styles.privacyLink}
       >
         Privacy Policy
       </Link>
