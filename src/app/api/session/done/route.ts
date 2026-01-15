@@ -52,6 +52,14 @@ export async function POST(request: Request) {
 		}
 
 		// Send push notification to scene owner (fire-and-forget)
+		console.log('[NOTIFICATION] /api/session/done called', {
+			sessionId: session.id,
+			sessionTitle: session.title,
+			userId: session.user_id,
+			previousStatus: session.status,
+			timestamp: new Date().toISOString(),
+		});
+
 		if (session.user_id && messaging) {
 			// Fetch owner's FCM token from profiles table
 			const { data: profile } = await supabaseAdmin
@@ -61,6 +69,12 @@ export async function POST(request: Request) {
 				.single();
 
 			if (profile?.fcm_token) {
+				console.log('[NOTIFICATION] Sending FCM push notification', {
+					sessionId: session.id,
+					userId: session.user_id,
+					tokenPrefix: profile.fcm_token.substring(0, 20) + '...',
+				});
+
 				messaging
 					.send({
 						token: profile.fcm_token,
@@ -90,14 +104,27 @@ export async function POST(request: Request) {
 						},
 					})
 					.then(() => {
-						console.log('Push notification sent for session:', session.id);
+						console.log('[NOTIFICATION] Push notification SENT successfully', {
+							sessionId: session.id,
+							timestamp: new Date().toISOString(),
+						});
 					})
 					.catch((err) => {
-						console.error('Failed to send push notification:', err);
+						console.error('[NOTIFICATION] Push notification FAILED', {
+							sessionId: session.id,
+							error: err,
+						});
 					});
 			} else {
-				console.log('No FCM token for user, skipping push notification');
+				console.log('[NOTIFICATION] No FCM token for user, skipping', {
+					userId: session.user_id,
+				});
 			}
+		} else {
+			console.log('[NOTIFICATION] Skipping - no user_id or messaging not configured', {
+				hasUserId: !!session.user_id,
+				hasMessaging: !!messaging,
+			});
 		}
 
 		return NextResponse.json({ ok: true });
