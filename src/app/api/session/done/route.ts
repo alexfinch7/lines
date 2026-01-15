@@ -35,6 +35,19 @@ export async function POST(request: Request) {
 		}
 
 		const session = data as ShareSession & { user_id?: string };
+		const previousStatus = session.status;
+		
+		// Log the incoming request details
+		console.log('[NOTIFICATION] /api/session/done called', {
+			sessionId: session.id,
+			sessionTitle: session.title,
+			userId: session.user_id,
+			previousStatus: previousStatus,
+			timestamp: new Date().toISOString(),
+			method: request.method,
+			url: request.url,
+		});
+
 		const allReaders = (session.reader_lines || []) as ReaderLine[];
 		const allHaveAudio = allReaders.every((l) => !!l.audioUrl);
 		if (!allHaveAudio) {
@@ -42,6 +55,7 @@ export async function POST(request: Request) {
 			// For stricter behavior, return 400 here instead.
 		}
 
+		// Update status to completed
 		const { error: updateError } = await supabaseAdmin
 			.from('share_sessions')
 			.update({ status: 'completed' })
@@ -51,15 +65,7 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Failed to mark as completed' }, { status: 500 });
 		}
 
-		// Send push notification to scene owner (fire-and-forget)
-		console.log('[NOTIFICATION] /api/session/done called', {
-			sessionId: session.id,
-			sessionTitle: session.title,
-			userId: session.user_id,
-			previousStatus: session.status,
-			timestamp: new Date().toISOString(),
-		});
-
+		// Send push notification to scene owner (await to ensure completion in serverless)
 		if (session.user_id && messaging) {
 			// Fetch owner's FCM token from profiles table
 			const { data: profile } = await supabaseAdmin
@@ -75,8 +81,8 @@ export async function POST(request: Request) {
 					tokenPrefix: profile.fcm_token.substring(0, 20) + '...',
 				});
 
-				messaging
-					.send({
+				try {
+					await messaging.send({
 						token: profile.fcm_token,
 						notification: {
 							title: 'Lines Received! 🎬',
@@ -102,19 +108,18 @@ export async function POST(request: Request) {
 								},
 							},
 						},
-					})
-					.then(() => {
-						console.log('[NOTIFICATION] Push notification SENT successfully', {
-							sessionId: session.id,
-							timestamp: new Date().toISOString(),
-						});
-					})
-					.catch((err) => {
-						console.error('[NOTIFICATION] Push notification FAILED', {
-							sessionId: session.id,
-							error: err,
-						});
 					});
+					
+					console.log('[NOTIFICATION] Push notification SENT successfully', {
+						sessionId: session.id,
+						timestamp: new Date().toISOString(),
+					});
+				} catch (err) {
+					console.error('[NOTIFICATION] Push notification FAILED', {
+						sessionId: session.id,
+						error: err,
+					});
+				}
 			} else {
 				console.log('[NOTIFICATION] No FCM token for user, skipping', {
 					userId: session.user_id,
