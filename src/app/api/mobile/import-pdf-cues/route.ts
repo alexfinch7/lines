@@ -4,7 +4,7 @@ import { extractDialogueFromImage } from '@/lib/extractDialogue';
 export const runtime = 'nodejs';
 export const maxDuration = 60; // Increase if processing many pages
 
-type Cue = ['myself' | 'reader', string];
+type Cue = ['myself' | 'reader', string] | [string];
 type ParsedLines = { lines: Cue[] };
 
 type ImportBody = {
@@ -44,13 +44,17 @@ export async function POST(request: Request) {
 				});
 
 				// Convert page lines to Cue format
-				const pageLines: Cue[] = dialogueDoc.lines.map((line) => {
-					const normalizedSpeaker = line.speaker.trim().toUpperCase();
-					const role: 'myself' | 'reader' = normalizedSpeaker.includes(target)
-						? 'myself'
-						: 'reader';
-					return [role, line.text];
-				});
+			const pageLines: Cue[] = dialogueDoc.lines.map((line) => {
+				if (line.type === 'setting_or_stage_direction') {
+					return [line.text];
+				}
+
+				const normalizedSpeaker = line.speaker.trim().toUpperCase();
+				const role: 'myself' | 'reader' = normalizedSpeaker.includes(target)
+					? 'myself'
+					: 'reader';
+				return [role, line.text];
+			});
 
 				allLines.push(...pageLines);
 			} catch (pageError) {

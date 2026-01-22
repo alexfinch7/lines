@@ -28,18 +28,38 @@ export async function extractDialogueFromImage(options: ExtractDialogueOptions) 
 						type: 'array',
 						description: 'List of all spoken dialogue lines on this page, strictly in order.',
 						items: {
-							type: 'object',
-							properties: {
-								speaker: { 
-									type: 'string',
-									description: "The character name in ALL CAPS. Example: 'HAMLET'. Continued dialogue should repeat the character name."
+							oneOf: [
+								{
+									type: 'object',
+									properties: {
+										type: {
+											const: 'dialogue'
+										},
+										speaker: {
+											type: 'string',
+											description: "The character name in ALL CAPS. Example: 'HAMLET'. Continued dialogue should repeat the character name."
+										},
+										text: {
+											type: 'string',
+											description: "The spoken dialogue text only, no character names, no stage directions. Only what the character says, verbatim. Do not leave anything out of the dialogue - letter perfect."
+										}
+									},
+									required: ['type', 'speaker', 'text']
 								},
-								text: { 
-									type: 'string',
-									description: "The spoken dialogue text only, no character names, no stage directions. Only what the character says, verbatim. Do not leave anything out of the dialogue - letter perfect."
+								{
+									type: 'object',
+									properties: {
+										type: {
+											const: 'setting_or_stage_direction'
+										},
+										text: {
+											type: 'string',
+											description: 'Stage direction OR setting text only, no character names.'
+										}
+									},
+									required: ['type', 'text']
 								}
-							},
-							required: ['speaker', 'text']
+							]
 						}
 					}
 				},
