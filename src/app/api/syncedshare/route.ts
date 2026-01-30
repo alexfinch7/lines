@@ -124,7 +124,7 @@ export async function POST(request: Request) {
 		}
 
 		// Insert a share session that is fully populated from the canonical scene.
-		const { data, error } = await supabaseAnon
+		const { data, error } = await supabaseAdmin
 			.from('share_sessions')
 			.insert({
 				title,
