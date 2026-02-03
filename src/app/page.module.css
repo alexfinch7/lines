@@ -53,6 +53,24 @@
   white-space: nowrap;
 }
 
+.downloadButton {
+  margin-top: 2rem;
+  padding: 10px 16px;
+  background-color: #3D5A80;
+  color: #FFFFFF;
+  border-radius: 30px;
+  font-size: 1rem;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  text-decoration: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.downloadButton:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(61, 90, 128, 0.3);
+}
+
 .privacyLink {
   position: absolute;
   bottom: 24px;

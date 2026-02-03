@@ -41,6 +41,14 @@ export default function Home() {
           />
         </div>
       </div>
+      <a
+        href="/download"
+        target="_blank"
+        rel="noopener noreferrer"
+        className={styles.downloadButton}
+      >
+        Download for iOS
+      </a>
       <Link
         href="/privacy"
         className={styles.privacyLink}
