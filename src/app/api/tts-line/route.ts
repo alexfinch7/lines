@@ -119,9 +119,14 @@ export async function POST(request: Request) {
 	let audioBuffer: Buffer;
 	try {
 		const startedAt = Date.now();
+		// Check for square brackets (e.g. [sigh]) to switch to the more expressive model
+		// User explicitly requested 'eleven_v3' for lines with brackets.
+		const hasSquareBrackets = /\[.*\]/.test(text);
+		const modelId = hasSquareBrackets ? 'eleven_v3' : 'eleven_flash_v2_5'; 
+
 		const audioResult = await client.textToSpeech.convert(voiceId, {
 			text,
-			modelId: 'eleven_flash_v2_5',
+			modelId,
 			voiceSettings: {
 				stability: 0.5,
 				similarityBoost: 0.75
